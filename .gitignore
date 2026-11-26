@@ -64,10 +64,10 @@ docker-compose.override.yml
 ############################
 # Frontend
 ############################
-frontend/node_modules/
+app/frontend/node_modules/
 /node_modules/
-frontend/dist/
-frontend/.env.local
+app/frontend/dist/
+app/frontend/.env.local
 
 # CI secrets
 ci/.env
