@@ -1,0 +1,38 @@
+#!/bin/bash
+# Déploiement en mode PULL : lancé chaque minute par cron sur le serveur k3s.
+# 1. Demande à Docker Hub le tag le plus récent de chaque image (le SHA poussé par la CI).
+# 2. Le compare à l'image qui tourne dans le cluster.
+# 3. S'il est différent : "kubectl set image" => Kubernetes fait un rolling update sans coupure.
+set -uo pipefail
+
+DOCKERHUB_USER="{{ dockerhub_user }}"
+NAMESPACE="jat"
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+log() { echo "$(date '+%F %T') $*"; }
+
+# Pause possible (par exemple pendant un rollback manuel) : sudo touch /etc/jat-pull.pause
+[ -f /etc/jat-pull.pause ] && exit 0
+
+for app in backend frontend; do
+  repo="${DOCKERHUB_USER}/jat-${app}"
+
+  # Tag le plus récent sur Docker Hub, en ignorant "latest" (on veut un SHA précis et traçable)
+  new_tag=$(curl -fsS --max-time 20 \
+      "https://hub.docker.com/v2/repositories/${repo}/tags?page_size=10&ordering=last_updated" \
+    | python3 -c 'import json,sys; print(next(r["name"] for r in json.load(sys.stdin)["results"] if r["name"] != "latest"))') \
+    || { log "${app}: Docker Hub injoignable, on réessaiera dans une minute"; continue; }
+
+  # Image qui tourne actuellement dans le cluster
+  current=$(k3s kubectl -n "$NAMESPACE" get deployment "$app" \
+      -o jsonpath='{.spec.template.spec.containers[0].image}')
+  [ -n "$current" ] || { log "${app}: deployment introuvable, rien à faire"; continue; }
+  wanted="${repo}:${new_tag}"
+
+  if [ "$current" != "$wanted" ]; then
+    log "${app}: nouvelle version ${current} -> ${wanted}, rolling update"
+    k3s kubectl -n "$NAMESPACE" set image "deployment/${app}" "${app}=${wanted}"
+    k3s kubectl -n "$NAMESPACE" annotate "deployment/${app}" \
+      kubernetes.io/change-cause="pull auto ${new_tag}" --overwrite
+  fi
+done

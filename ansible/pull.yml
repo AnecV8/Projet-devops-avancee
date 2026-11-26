@@ -1,0 +1,19 @@
+# Déploiement continu en mode PULL : c'est la VM qui va chercher les nouvelles images,
+# la CI n'a besoin d'aucun accès aux VM.
+#   ansible-playbook pull.yml --ask-vault-pass
+- name: Installer la mise à jour automatique (pull toutes les minutes)
+  hosts: k3s_server
+  become: true
+  tasks:
+    - name: Installer le script de pull
+      ansible.builtin.template:
+        src: templates/jat-pull.sh.j2
+        dest: /usr/local/bin/jat-pull.sh
+        mode: "0755"
+
+    - name: Lancer le script chaque minute (cron)
+      ansible.builtin.cron:
+        name: jat-pull
+        minute: "*"
+        job: "/usr/local/bin/jat-pull.sh >> /var/log/jat-pull.log 2>&1"
+        user: root

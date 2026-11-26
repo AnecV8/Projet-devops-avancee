@@ -85,3 +85,6 @@
 
 - name: 4. Déployer l'application
   ansible.builtin.import_playbook: deploy.yml
+
+- name: 5. Activer le déploiement continu en mode pull
+  ansible.builtin.import_playbook: pull.yml
