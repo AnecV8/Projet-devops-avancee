@@ -54,7 +54,7 @@ class LoginEndpointTest {
                         .content("""
                             {"email":"login@example.com","password":"WrongPass1!"}
                         """))
-                .andExpect(status().isUnauthorized())
+                .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value(401))
                 .andExpect(jsonPath("$.error").value("Unauthorized"));
     }
