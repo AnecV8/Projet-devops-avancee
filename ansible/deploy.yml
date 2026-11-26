@@ -42,20 +42,36 @@
     - name: Créer ou mettre à jour le Secret (mot de passe BDD, clé JWT)
       ansible.builtin.shell: |
         set -o pipefail
-        k3s kubectl -n jat create secret generic jat-secret \
+        manifest=$(k3s kubectl -n jat create secret generic jat-secret \
           --from-literal=DB_PASSWORD='{{ db_password }}' \
           --from-literal=JWT_SECRET='{{ jwt_secret }}' \
-          --dry-run=client -o yaml | k3s kubectl apply -f -
+          --dry-run=client -o yaml)
+        # "kubectl diff" renvoie 0 si rien ne change : on n'applique que s'il y a une différence
+        if echo "$manifest" | k3s kubectl diff -f - > /dev/null 2>&1; then
+          echo "INCHANGE"
+        else
+          echo "$manifest" | k3s kubectl apply -f -
+        fi
       args:
         executable: /bin/bash
       no_log: true                 # le mot de passe n'apparaît pas dans les logs
       register: secret
-      changed_when: "'configured' in secret.stdout or 'created' in secret.stdout"
+      changed_when: "'INCHANGE' not in secret.stdout"
 
     - name: Appliquer tous les manifests (kubectl apply -k sur l'overlay)
-      ansible.builtin.command: k3s kubectl apply -k {{ app_dir }}/overlay/
+      # "apply" affiche "configured" pour certains objets (StatefulSet, PDB) même sans vrai changement :
+      # on compare d'abord avec "kubectl diff", et on n'applique que s'il y a une vraie différence.
+      ansible.builtin.shell: |
+        if k3s kubectl diff -k {{ app_dir }}/overlay/ > /dev/null 2>&1; then
+          echo "INCHANGE"
+        else
+          k3s kubectl apply -k {{ app_dir }}/overlay/
+        fi
+      args:
+        executable: /bin/bash
       register: apply
-      changed_when: "'configured' in apply.stdout or 'created' in apply.stdout"
+      changed_when: "'INCHANGE' not in apply.stdout"
+      failed_when: apply.rc != 0
 
     - name: Attendre la fin du rolling update du back
       ansible.builtin.command: k3s kubectl -n jat rollout status deployment/backend --timeout=300s
