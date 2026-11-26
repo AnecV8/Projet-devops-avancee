@@ -4,7 +4,7 @@ Projet ESGI (DevOps avancé) : mise en production de l'application **Job Applica
 (API Spring Boot + frontend React + PostgreSQL) avec conteneurs, Infrastructure-as-Code,
 CI/CD, Kubernetes, zéro-downtime, auto-scaling et observabilité.
 
-**Équipe :** <Basma MORABIT> · <Mariam FATHALLAH> · <Siham AIDROUS>
+**Équipe :** Basma MORABIT · Mariam FATHALLAH · Siham AIDROUS
 
 ## Structure du dépôt
 
