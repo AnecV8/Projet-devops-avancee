@@ -1,0 +1,56 @@
+# STAGING : toute l'application (PostgreSQL + API + front) sur une seule machine.
+#
+#   cd staging
+#   docker compose up -d --build                  -> images construites en local
+#   DH=<user> TAG=<sha> docker compose up -d      -> images de Docker Hub (celles de la CI)
+#
+# Ports par défaut : front 8080, API 8082. Si un port est déjà pris sur ta machine :
+#   BACKEND_PORT=8092 FRONTEND_PORT=8088 docker compose up -d
+#
+# Les mêmes images tournent en prod (Kubernetes) : seules les variables changent.
+name: jat-staging
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: jobtracker
+      POSTGRES_USER: jobtracker
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-staging-pass}
+    volumes:
+      - db-data:/var/lib/postgresql/data      # les données survivent à un "down"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobtracker -d jobtracker"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    image: ${DH:-local}/jat-backend:${TAG:-latest}
+    build: ../app/backend
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/jobtracker   # "db" = nom DNS du service
+      SPRING_DATASOURCE_USERNAME: jobtracker
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:-staging-pass}
+      JWT_SECRET: ${JWT_SECRET:-staging-secret-staging-secret-staging-secret-1234}
+    ports:
+      - "${BACKEND_PORT:-8082}:8080"          # accès direct à l'API et à /actuator
+    depends_on:
+      db:
+        condition: service_healthy            # Spring attend que PostgreSQL réponde
+    restart: unless-stopped
+
+  frontend:
+    image: ${DH:-local}/jat-frontend:${TAG:-latest}
+    build: ../app/frontend
+    environment:
+      BACKEND_URL: http://backend:8080        # nginx transmet /api au back
+    ports:
+      - "${FRONTEND_PORT:-8080}:8080"         # l'application : http://localhost:8080
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  db-data:
