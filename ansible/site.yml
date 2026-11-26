@@ -43,7 +43,7 @@
     - name: Attendre que le nœud soit prêt
       ansible.builtin.command: k3s kubectl wait --for=condition=Ready node/{{ inventory_hostname }} --timeout=30s
       register: node_ready
-      until: node_ready.rc == 0
+      until: node_ready.rc == 0     # le nœud n'existe pas encore juste après l'installation : on réessaie
       retries: 20
       delay: 10
       changed_when: false
@@ -53,17 +53,16 @@
         src: /var/lib/rancher/k3s/server/node-token
       register: k3s_token
 
-    - name: Récupérer le kubeconfig sur ton poste (pour lancer kubectl en local)
-      ansible.builtin.fetch:
+    - name: Lire le kubeconfig du serveur
+      ansible.builtin.slurp:
         src: /etc/rancher/k3s/k3s.yaml
-        dest: ./kubeconfig
-        flat: true
+      register: k3s_kubeconfig
 
-    - name: Remplacer 127.0.0.1 par l'IP du serveur dans le kubeconfig local
-      ansible.builtin.replace:
-        path: ./kubeconfig
-        regexp: '127\.0\.0\.1'
-        replace: "{{ ansible_host }}"
+    - name: Écrire le kubeconfig sur ton poste, avec l'IP du serveur (pour kubectl en local)
+      ansible.builtin.copy:
+        content: "{{ k3s_kubeconfig.content | b64decode | replace('127.0.0.1', ansible_host) }}"
+        dest: ./kubeconfig
+        mode: "0600"
       delegate_to: localhost
       become: false
 

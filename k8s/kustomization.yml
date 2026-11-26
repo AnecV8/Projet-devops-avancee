@@ -1,6 +1,7 @@
 # Point d'entrée : kubectl apply -k k8s/
-# Tous les objets vont dans le namespace "jat". Les images et leur tag se changent ICI
-# (Ansible réécrit les deux "newTag" avec la version à déployer).
+# Base commune : tous les objets vont dans le namespace "jat".
+# Le nom des images Docker Hub et leur tag ne sont PAS ici : Ansible génère sur le serveur
+# un overlay ({{ app_dir }}/overlay/kustomization.yml) qui pointe vers cette base.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: jat
@@ -12,10 +13,3 @@ resources:
   - frontend.yml
   - ingress.yml
   - hpa.yml
-images:
-  - name: jat-backend
-    newName: TON_USER_DOCKERHUB/jat-backend
-    newTag: latest
-  - name: jat-frontend
-    newName: TON_USER_DOCKERHUB/jat-frontend
-    newTag: latest

@@ -19,7 +19,7 @@ metadata:
   labels:
     app: backend
 spec:
-  replicas: 2
+  # pas de "replicas" : c'est le HPA qui décide (2 minimum), sinon chaque apply le remettrait à 2
   revisionHistoryLimit: 5            # permet "kubectl rollout undo"
   # ZÉRO-DOWNTIME : un pod neuf démarre AVANT qu'un ancien soit arrêté,
   # et il ne reçoit du trafic qu'une fois sa readinessProbe verte.

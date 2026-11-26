@@ -10,17 +10,29 @@
         dest: "{{ app_dir }}/k8s/"
         mode: "0644"
 
-    - name: Mettre le bon utilisateur Docker Hub dans kustomization.yml
-      ansible.builtin.replace:
-        path: "{{ app_dir }}/k8s/kustomization.yml"
-        regexp: 'TON_USER_DOCKERHUB'
-        replace: "{{ dockerhub_user }}"
+    - name: Créer le dossier de l'overlay
+      ansible.builtin.file:
+        path: "{{ app_dir }}/overlay"
+        state: directory
+        mode: "0755"
 
-    - name: Mettre la version à déployer (tag des images)
-      ansible.builtin.replace:
-        path: "{{ app_dir }}/k8s/kustomization.yml"
-        regexp: 'newTag: .*'
-        replace: "newTag: \"{{ app_version }}\""
+    - name: Générer l'overlay avec les images et la version à déployer
+      ansible.builtin.copy:
+        dest: "{{ app_dir }}/overlay/kustomization.yml"
+        mode: "0644"
+        content: |
+          # Généré par Ansible : la base k8s/ + le nom et le tag des images
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          resources:
+            - ../k8s
+          images:
+            - name: jat-backend
+              newName: {{ dockerhub_user }}/jat-backend
+              newTag: "{{ app_version }}"
+            - name: jat-frontend
+              newName: {{ dockerhub_user }}/jat-frontend
+              newTag: "{{ app_version }}"
 
     - name: Créer le namespace
       ansible.builtin.command: k3s kubectl apply -f {{ app_dir }}/k8s/namespace.yml
@@ -40,8 +52,8 @@
       register: secret
       changed_when: "'configured' in secret.stdout or 'created' in secret.stdout"
 
-    - name: Appliquer tous les manifests (kubectl apply -k)
-      ansible.builtin.command: k3s kubectl apply -k {{ app_dir }}/k8s/
+    - name: Appliquer tous les manifests (kubectl apply -k sur l'overlay)
+      ansible.builtin.command: k3s kubectl apply -k {{ app_dir }}/overlay/
       register: apply
       changed_when: "'configured' in apply.stdout or 'created' in apply.stdout"
 

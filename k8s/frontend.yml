@@ -15,7 +15,7 @@ kind: Deployment
 metadata:
   name: frontend
 spec:
-  replicas: 2
+  # pas de "replicas" : c'est le HPA qui décide (2 minimum), sinon chaque apply le remettrait à 2
   strategy:
     type: RollingUpdate
     rollingUpdate:
