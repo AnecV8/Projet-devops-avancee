@@ -1,11 +1,21 @@
 # STAGING : toute l'application (PostgreSQL + API + front) sur une seule machine.
 #
-#   cd staging
-#   docker compose up -d --build                  -> images construites en local
-#   DH=<user> TAG=<sha> docker compose up -d      -> images de Docker Hub (celles de la CI)
+# Toutes les commandes se lancent depuis le dossier staging/.
 #
-# Ports par défaut : front 8080, API 8082. Si un port est déjà pris sur ta machine :
-#   BACKEND_PORT=8092 FRONTEND_PORT=8088 docker compose up -d
+# 1) Images construites depuis le code local (SANS DH/TAG) :
+#      docker compose up -d --build
+#
+# 2) Images publiées par la CI sur Docker Hub (SANS --build, sinon le code local
+#    serait construit et étiqueté avec le nom de l'image officielle) :
+#      bash       : DH=<user> TAG=<sha> docker compose pull
+#                   DH=<user> TAG=<sha> docker compose up -d
+#      PowerShell : $env:DH="<user>"; $env:TAG="<sha>"
+#                   docker compose pull; docker compose up -d
+#                   Remove-Item Env:DH, Env:TAG     # sinon DH/TAG restent actifs
+#
+# Ports par défaut : front 8080, API 8082. Si un port est déjà pris sur la machine :
+#      bash       : BACKEND_PORT=8092 docker compose up -d
+#      PowerShell : $env:BACKEND_PORT="8092"; docker compose up -d
 #
 # Les mêmes images tournent en prod (Kubernetes) : seules les variables changent.
 name: jat-staging
