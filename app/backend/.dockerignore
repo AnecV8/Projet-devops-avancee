@@ -1,0 +1,4 @@
+# Fichiers inutiles pour construire les images Docker du backend
+**/node_modules
+target/*
+!target/app-under-test.jar
