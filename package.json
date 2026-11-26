@@ -1,7 +1,7 @@
 {
   "name": "job-application-tracker-release",
   "private": true,
-  "description": "Outils de release (commitlint, semantic-release) utilisés par le pipeline Jenkins",
+  "description": "Outils de release (commitlint, semantic-release) utilisés par le pipeline GitHub Actions",
   "scripts": {
     "commitlint": "commitlint",
     "release": "semantic-release"

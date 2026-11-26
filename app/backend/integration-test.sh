@@ -1,7 +1,7 @@
 #!/bin/sh
 # Tests d'intégration : appli + PostgreSQL via Docker Compose, puis appels réels à l'API.
 set -eu
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
 COMPOSE="docker compose -f docker-compose.test.yml -p tracker-it-${EXECUTOR_NUMBER:-0}"

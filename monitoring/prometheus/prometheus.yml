@@ -9,12 +9,6 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:9090"]
 
-  # Jenkins : plugin "prometheus" (builds, durées, résultats, file d'attente)
-  - job_name: jenkins
-    metrics_path: /prometheus/
-    static_configs:
-      - targets: ["jenkins:8080"]
-
   # Application déployée : métriques Spring Boot (Micrometer)
   # Le port de prod passe par le proxy nginx blue/green : on mesure toujours la couleur active.
   - job_name: app
@@ -26,9 +20,3 @@ scrape_configs:
       - targets: ["host.docker.internal:8083"]
         labels:
           environment: production
-
-  # Métriques DORA (ci/dora-exporter) : fréquence, délai, taux d'échec, rétablissement
-  - job_name: dora
-    scrape_interval: 60s
-    static_configs:
-      - targets: ["dora-exporter:9101"]
