@@ -1,6 +1,4 @@
 /app/backend/mvnw text eol=lf
 *.cmd text eol=crlf
 *.sh text eol=lf
-ci/** text eol=lf
-Jenkinsfile text eol=lf
 infra/** text eol=lf

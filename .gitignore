@@ -53,7 +53,6 @@ Thumbs.db
 ############################
 .env
 .env.*
-!ci/.env.example
 application-local.yml
 
 ############################
@@ -68,9 +67,6 @@ app/frontend/node_modules/
 /node_modules/
 app/frontend/dist/
 app/frontend/.env.local
-
-# CI secrets
-ci/.env
 
 # OpenTofu : état, plans et dossiers d init (contiennent des secrets ou sont générés)
 .terraform/
