@@ -1,0 +1,99 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  labels:
+    app: backend
+spec:
+  selector:
+    app: backend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    app: backend
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5            # permet "kubectl rollout undo"
+  # ZÉRO-DOWNTIME : un pod neuf démarre AVANT qu'un ancien soit arrêté,
+  # et il ne reçoit du trafic qu'une fois sa readinessProbe verte.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      terminationGracePeriodSeconds: 40
+      # Répartit les pods sur les 2 nœuds quand c'est possible
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: backend
+      containers:
+        - name: backend
+          image: jat-backend               # nom et tag remplacés par kustomization.yml
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: jat-config
+          env:
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: jat-secret, key: DB_PASSWORD }
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef: { name: jat-secret, key: JWT_SECRET }
+          # Spring met ~30 s à démarrer : la startupProbe lui laisse jusqu'à 3 min
+          # avant que les autres sondes ne prennent le relais.
+          startupProbe:
+            httpGet: { path: /actuator/health, port: http }
+            periodSeconds: 5
+            failureThreshold: 36
+          # Prêt à recevoir du trafic ? (l'appli ET la base répondent)
+          readinessProbe:
+            httpGet: { path: /actuator/health, port: http }
+            periodSeconds: 5
+            failureThreshold: 3
+          # Vivant ? Sinon Kubernetes redémarre le conteneur.
+          livenessProbe:
+            tcpSocket: { port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          # Laisse le temps au Service de retirer le pod avant l'arrêt : aucune requête coupée
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "10"]
+          # Les "requests" sont indispensables au HPA (il calcule un % de la request CPU)
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: "1", memory: 768Mi }
+---
+# Au moins un pod back reste disponible pendant une maintenance de nœud
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: backend

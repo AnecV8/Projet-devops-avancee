@@ -1,0 +1,16 @@
+# Entrée HTTP du cluster (Traefik est fourni par k3s) : http://<IP de n'importe quelle VM>/
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jat
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80

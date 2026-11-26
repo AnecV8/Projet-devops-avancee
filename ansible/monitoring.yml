@@ -1,0 +1,51 @@
+# Installe la supervision de la prod (Prometheus + Grafana) avec Helm :
+#   ansible-playbook monitoring.yml
+- name: Installer kube-prometheus-stack sur le cluster
+  hosts: k3s_server
+  become: true
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  tasks:
+    - name: Installer Helm
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      args:
+        executable: /bin/bash
+        creates: /usr/local/bin/helm
+
+    - name: Ajouter le dépôt Helm prometheus-community
+      ansible.builtin.command: helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
+      changed_when: false
+
+    - name: Copier les fichiers de monitoring
+      ansible.builtin.copy:
+        src: ../monitoring/
+        dest: "{{ app_dir }}/monitoring/"
+        mode: "0644"
+
+    - name: Installer ou mettre à jour kube-prometheus-stack
+      ansible.builtin.command: >
+        helm upgrade --install monitoring prometheus-community/kube-prometheus-stack
+        --namespace monitoring --create-namespace
+        -f {{ app_dir }}/monitoring/kube-prometheus-values.yml
+        --wait --timeout 10m
+      changed_when: true
+
+    - name: Charger le dashboard des golden signals dans Grafana
+      ansible.builtin.shell: |
+        set -o pipefail
+        k3s kubectl -n monitoring create configmap jat-dashboard \
+          --from-file={{ app_dir }}/monitoring/grafana/dashboards/golden-signals.json \
+          --dry-run=client -o yaml \
+          | k3s kubectl label --local -f - grafana_dashboard=1 -o yaml \
+          | k3s kubectl apply -f -
+      args:
+        executable: /bin/bash
+      register: dash
+      changed_when: "'configured' in dash.stdout or 'created' in dash.stdout"
+
+    - name: Déclarer le back-end à Prometheus (ServiceMonitor)
+      ansible.builtin.command: k3s kubectl apply -f {{ app_dir }}/monitoring/servicemonitor.yml
+      register: sm
+      changed_when: "'configured' in sm.stdout or 'created' in sm.stdout"

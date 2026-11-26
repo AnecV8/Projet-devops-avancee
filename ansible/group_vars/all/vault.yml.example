@@ -1,0 +1,6 @@
+# Copier en vault.yml, remplir, puis CHIFFRER :
+#   cp group_vars/all/vault.yml.example group_vars/all/vault.yml
+#   ansible-vault encrypt group_vars/all/vault.yml
+# Les playbooks se lancent alors avec --ask-vault-pass.
+db_password: change-moi
+jwt_secret: une-cle-tres-longue-d-au-moins-32-caracteres-change-moi

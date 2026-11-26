@@ -1,0 +1,63 @@
+# Déploie (ou met à jour) l'appli sur le cluster, sans coupure :
+#   ansible-playbook deploy.yml --ask-vault-pass -e app_version=abc1234
+- name: Déployer Job Application Tracker sur k3s
+  hosts: k3s_server
+  become: true
+  tasks:
+    - name: Copier les manifests Kubernetes sur le serveur
+      ansible.builtin.copy:
+        src: ../k8s/
+        dest: "{{ app_dir }}/k8s/"
+        mode: "0644"
+
+    - name: Mettre le bon utilisateur Docker Hub dans kustomization.yml
+      ansible.builtin.replace:
+        path: "{{ app_dir }}/k8s/kustomization.yml"
+        regexp: 'TON_USER_DOCKERHUB'
+        replace: "{{ dockerhub_user }}"
+
+    - name: Mettre la version à déployer (tag des images)
+      ansible.builtin.replace:
+        path: "{{ app_dir }}/k8s/kustomization.yml"
+        regexp: 'newTag: .*'
+        replace: "newTag: \"{{ app_version }}\""
+
+    - name: Créer le namespace
+      ansible.builtin.command: k3s kubectl apply -f {{ app_dir }}/k8s/namespace.yml
+      register: ns
+      changed_when: "'created' in ns.stdout"
+
+    - name: Créer ou mettre à jour le Secret (mot de passe BDD, clé JWT)
+      ansible.builtin.shell: |
+        set -o pipefail
+        k3s kubectl -n jat create secret generic jat-secret \
+          --from-literal=DB_PASSWORD='{{ db_password }}' \
+          --from-literal=JWT_SECRET='{{ jwt_secret }}' \
+          --dry-run=client -o yaml | k3s kubectl apply -f -
+      args:
+        executable: /bin/bash
+      no_log: true                 # le mot de passe n'apparaît pas dans les logs
+      register: secret
+      changed_when: "'configured' in secret.stdout or 'created' in secret.stdout"
+
+    - name: Appliquer tous les manifests (kubectl apply -k)
+      ansible.builtin.command: k3s kubectl apply -k {{ app_dir }}/k8s/
+      register: apply
+      changed_when: "'configured' in apply.stdout or 'created' in apply.stdout"
+
+    - name: Attendre la fin du rolling update du back
+      ansible.builtin.command: k3s kubectl -n jat rollout status deployment/backend --timeout=300s
+      changed_when: false
+
+    - name: Attendre la fin du rolling update du front
+      ansible.builtin.command: k3s kubectl -n jat rollout status deployment/frontend --timeout=120s
+      changed_when: false
+
+    - name: Afficher l'état final
+      ansible.builtin.command: k3s kubectl -n jat get pods,svc,hpa,ingress -o wide
+      register: state
+      changed_when: false
+
+    - name: Résultat
+      ansible.builtin.debug:
+        msg: "{{ state.stdout_lines }}"

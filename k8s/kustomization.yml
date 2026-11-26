@@ -1,0 +1,21 @@
+# Point d'entrée : kubectl apply -k k8s/
+# Tous les objets vont dans le namespace "jat". Les images et leur tag se changent ICI
+# (Ansible réécrit les deux "newTag" avec la version à déployer).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: jat
+resources:
+  - namespace.yml
+  - configmap.yml
+  - postgres.yml
+  - backend.yml
+  - frontend.yml
+  - ingress.yml
+  - hpa.yml
+images:
+  - name: jat-backend
+    newName: TON_USER_DOCKERHUB/jat-backend
+    newTag: latest
+  - name: jat-frontend
+    newName: TON_USER_DOCKERHUB/jat-frontend
+    newTag: latest
