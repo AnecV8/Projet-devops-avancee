@@ -1,5 +1,5 @@
 # Variables communes à toutes les machines
 k3s_version: v1.33.4+k3s1
 dockerhub_user: mariamfathallah
-app_version: 4ec302e            # tag des images à déployer (SHA court donné par la CI)
+app_version: ccbdf81
 app_dir: /opt/jat              # où les manifests sont copiés sur le serveur
