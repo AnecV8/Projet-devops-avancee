@@ -15,7 +15,7 @@ flowchart LR
   dev[Développeur] -->|push / PR| gh[GitHub]
   gh --> ci[GitHub Actions<br/>tests, lint, hadolint]
   ci -->|main uniquement| hub[(Docker Hub<br/>jat-backend / jat-frontend<br/>tag = SHA court)]
-  hub -->|runner CI : deploy-staging| stg[Staging<br/>docker compose]
+  hub -->|runner CI : deploy-staging| stg[Staging<br/>docker compose<br/>+ métriques, logs]
   hub -->|pull chaque minute<br/>jat-pull.sh| prod[Prod k3s<br/>vm1 + vm2]
 ```
 
