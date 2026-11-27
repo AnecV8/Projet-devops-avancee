@@ -13,6 +13,10 @@
 #                   docker compose pull; docker compose up -d
 #                   Remove-Item Env:DH, Env:TAG     # sinon DH/TAG restent actifs
 #
+# 3) Déploiement semi-automatique (pull + vérification de santé + rollback si échec) :
+#      bash       : ./deploy-staging.sh [sha]       (sans sha : dernière version publiée par la CI)
+#      PowerShell : .\deploy-staging.ps1 [sha]
+#
 # Supervision : Prometheus http://localhost:9090, Grafana http://localhost:3000, cAdvisor http://localhost:8081
 #
 # Ports par défaut : front 8080, API 8082. Si un port est déjà pris sur la machine :
