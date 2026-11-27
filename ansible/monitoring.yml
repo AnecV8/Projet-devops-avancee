@@ -1,0 +1,80 @@
+# Installe la supervision de la prod (Prometheus + Grafana) avec Helm :
+#   ansible-playbook monitoring.yml --ask-vault-pass
+# Versions figées pour que l'installation soit reproductible (même résultat demain qu'aujourd'hui).
+- name: Installer kube-prometheus-stack sur le cluster
+  hosts: k3s_server
+  become: true
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  vars:
+    helm_version: v3.22.1
+    kps_chart_version: "94.1.0"
+  tasks:
+    - name: Installer Helm
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | DESIRED_VERSION={{ helm_version }} bash
+      args:
+        executable: /bin/bash
+        creates: /usr/local/bin/helm
+
+    - name: Ajouter le dépôt Helm prometheus-community
+      ansible.builtin.command: helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
+      changed_when: false
+
+    - name: Copier les fichiers de monitoring
+      ansible.builtin.copy:
+        src: ../monitoring/
+        dest: "{{ app_dir }}/monitoring/"
+        mode: "0644"
+      register: monitoring_files
+
+    - name: Lire la version du chart déjà installée
+      ansible.builtin.command: helm list -n monitoring -f '^monitoring$' -o json
+      register: helm_release
+      changed_when: false
+
+    - name: Mémoriser une empreinte du mot de passe Grafana (pour détecter un changement)
+      ansible.builtin.copy:
+        content: "{{ grafana_admin_password | hash('sha256') }}\n"
+        dest: "{{ app_dir }}/monitoring/.grafana-password.sha256"
+        mode: "0600"
+      register: grafana_password
+
+    - name: Installer ou mettre à jour kube-prometheus-stack (version figée)
+      ansible.builtin.command: >
+        helm upgrade --install monitoring prometheus-community/kube-prometheus-stack
+        --version {{ kps_chart_version }}
+        --namespace monitoring --create-namespace
+        -f {{ app_dir }}/monitoring/kube-prometheus-values.yml
+        --set grafana.adminPassword={{ grafana_admin_password }}
+        --wait --timeout 10m
+      no_log: true                  # le mot de passe Grafana (vault) n'apparaît pas dans les logs
+      changed_when: true
+      # On ne relance Helm que si quelque chose a changé : idempotence (changed=0 à la relance)
+      when: >-
+        monitoring_files.changed or grafana_password.changed
+        or (helm_release.stdout | from_json | length) == 0
+        or (helm_release.stdout | from_json | first).chart != 'kube-prometheus-stack-' ~ kps_chart_version
+
+    - name: Charger le dashboard des golden signals dans Grafana
+      ansible.builtin.shell: |
+        set -o pipefail
+        manifest=$(k3s kubectl -n monitoring create configmap jat-dashboard \
+          --from-file={{ app_dir }}/monitoring/grafana/dashboards/golden-signals.json \
+          --dry-run=client -o yaml | k3s kubectl label --local -f - grafana_dashboard=1 -o yaml)
+        # on n'applique que s'il y a une vraie différence (sinon "configured" à chaque fois)
+        if echo "$manifest" | k3s kubectl diff -f - > /dev/null 2>&1; then
+          echo "INCHANGE"
+        else
+          echo "$manifest" | k3s kubectl apply -f -
+        fi
+      args:
+        executable: /bin/bash
+      register: dash
+      changed_when: "'INCHANGE' not in dash.stdout"
+
+    - name: Déclarer le back-end à Prometheus (ServiceMonitor)
+      ansible.builtin.command: k3s kubectl apply -f {{ app_dir }}/monitoring/servicemonitor.yml
+      register: sm
+      changed_when: "'configured' in sm.stdout or 'created' in sm.stdout"
