@@ -27,12 +27,14 @@ flowchart TB
     ing[Ingress Traefik] --> pfront[frontend x2..4]
     pfront --> pback[backend x2..5]
     pback --> pdb[(postgres StatefulSet)]
-    hpa[HPA] -.-> pfront & pback
-    cron[cron jat-pull.sh] -.->|kubectl set image| pback & pfront
+    hpa[HPA] -.-> pfront
+    hpa -.-> pback
+    cron[cron jat-pull.sh] -.->|kubectl set image| pback
+    cron -.-> pfront
     kps[Prometheus + Grafana<br/>kube-prometheus-stack] -.-> pback
   end
 
-  hub -->|deploy-staging.sh| Staging
+  hub -->|CI : deploy-staging| Staging
   hub -->|pull chaque minute| cron
 ```
 
@@ -52,15 +54,17 @@ flowchart TB
   `nginx-unprivileged:1.27-alpine` (sans root) sert le résultat. L'URL du back-end est injectée au démarrage
   (`BACKEND_URL`), donc **la même image** sert en staging et en prod.
 - Les Dockerfiles sont analysés par **hadolint** dans la CI.
+- **Docker sur la VM de staging** est installé par Ansible (`ansible/docker.yml`) depuis le dépôt officiel Docker
+  (Docker Engine + plugin Compose), sur une VM séparée des nœuds k3s.
 - `docker-compose.yml` à la racine : base PostgreSQL seule pour le développement local.
 
 ## 4. Environnements staging et production
 
 | | Staging | Production |
 |---|---|---|
-| Plateforme | docker compose, une machine | Kubernetes **k3s v1.33** sur 2 VM Multipass (vm1 serveur, vm2 agent) |
+| Plateforme | docker compose sur une machine dédiée ; sur une VM Linux vierge, Docker est installé par Ansible | Kubernetes **k3s v1.33** sur 2 VM Multipass (vm1 serveur, vm2 agent) |
 | Images | les mêmes images Docker Hub que la prod | idem |
-| Déploiement | `staging/deploy-staging.sh` : health check + smoke test + rollback automatique | mode pull : cron chaque minute sur vm1 |
+| Déploiement | automatique par la CI (runner auto-hébergé, `deploy-staging.ps1`) : health check + smoke test + rollback ; variante Linux reproductible : `ansible/docker.yml` | mode pull : cron chaque minute sur vm1 |
 | Config | variables d'environnement du compose | ConfigMap + Secret Kubernetes |
 | Supervision | Prometheus + cAdvisor + Grafana | kube-prometheus-stack (Prometheus Operator + Grafana) |
 | Logs | Loki + Alloy | — (voir limites) |
@@ -68,7 +72,7 @@ flowchart TB
 ### Architecture Kubernetes (namespace `jat`)
 
 - **postgres** : StatefulSet avec volume persistant (StorageClass `local-path` de k3s).
-- **backend** : Deployment, probes readiness/liveness sur `/actuator/health`, `preStop` + arrêt gracieux de Spring,
+- **backend** : Deployment, probes startup/readiness sur `/actuator/health` et liveness TCP, `preStop` + arrêt gracieux de Spring,
   PodDisruptionBudget (`minAvailable: 1`), requests/limits CPU et mémoire.
 - **frontend** : Deployment, probes sur `/healthz`, `preStop`.
 - **Ingress** Traefik (fourni par k3s) : l'appli répond sur `http://<IP d'une VM>/`.
@@ -84,6 +88,8 @@ flowchart TB
   3. jonction de vm2 comme agent ;
   4. déploiement de l'application (`deploy.yml`) ;
   5. installation du mode pull (`pull.yml`).
+- `ansible/docker.yml` installe Docker sur une VM Ubuntu vierge et y déploie le staging (secrets lus dans le vault).
+  La VM est séparée des nœuds k3s : Docker modifie les règles iptables et peut casser le réseau des pods.
 - `ansible/monitoring.yml` installe la supervision de prod avec **Helm** (versions figées : chart 94.1.0, Helm 3.22.1).
 - Les secrets sont chiffrés avec **ansible-vault**.
 - Les playbooks sont **idempotents** : relancés sur un cluster à jour, ils affichent `changed=0`.
@@ -94,13 +100,16 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-  pr[PR ou push] --> b[Back : tests + JaCoCo]
-  pr --> i[Intégration : API + PostgreSQL]
-  pr --> f[Front : ESLint + Vitest + build]
-  pr --> h[hadolint]
-  b & i & f & h -->|main uniquement| img[Build + push Docker Hub<br/>tag = SHA court]
-  img --> stg[Staging : runner CI + deploy-staging]
-  img --> prod[Prod : pull automatique]
+  pr["PR ou push"] --> b["Back : tests + JaCoCo"]
+  pr --> i["Intégration : API + PostgreSQL"]
+  pr --> f["Front : ESLint + Vitest + build"]
+  pr --> h["hadolint"]
+  b --> img["Build + push Docker Hub, tag = SHA court"]
+  i --> img
+  f --> img
+  h --> img
+  img --> stg["Staging : job deploy-staging, runner auto-hébergé"]
+  img --> prod["Prod : pull automatique"]
 ```
 
 - Outil : **GitHub Actions** (`.github/workflows/ci.yml`), à la place du Jenkins du projet précédent.
@@ -117,6 +126,21 @@ flowchart LR
   (pas de kubeconfig ni de clé SSH dans GitHub). C'est le principe de GitOps (Argo CD, Flux), en version simple.
 
 ## 7. Déploiement sans interruption
+
+### Choix de la stratégie
+
+| Stratégie | Principe | Pour nous |
+|---|---|---|
+| **Rolling update** | les pods sont remplacés un par un | **retenue** : native dans Kubernetes, aucune ressource en plus, adaptée à 2 petites VM |
+| Blue/Green | deux environnements complets, bascule d'un coup | double les ressources (2 bases ou base partagée), trop lourd pour 2 VM |
+| Canary | une petite part du trafic va d'abord à la nouvelle version | demande un routage pondéré et une analyse des métriques (Flagger, Argo Rollouts) : piste d'amélioration |
+
+**Conditions de réussite d'un déploiement** : chaque nouveau pod passe sa startup probe puis sa readiness probe
+(`/actuator/health` UP, base comprise), et `kubectl rollout status` se termine avant le délai (300 s pour le back-end).
+**Échec** : un pod n'est jamais prêt. Le rollout s'arrête, les anciens pods continuent de servir
+(`maxUnavailable: 0`), et on revient en arrière avec `kubectl rollout undo`.
+
+### Mise en œuvre
 
 - **Rolling update** avec `maxUnavailable: 0` et `maxSurge: 1` : un nouveau pod démarre avant qu'un ancien s'arrête.
 - **Readiness probe** : un pod ne reçoit du trafic qu'une fois prêt. Une image cassée ne remplace donc jamais
@@ -144,20 +168,35 @@ Tableau de bord **Golden signals** (le même en staging et en prod) :
 | Latence | temps de réponse de l'API (Micrometer) |
 | Trafic | requêtes par seconde, par route |
 | Erreurs | taux de réponses 5xx, réponses par code HTTP |
-| Saturation | CPU et mémoire par conteneur/pod, CPU et heap de la JVM, nombre d'instances |
+| Saturation | CPU, mémoire et réseau par conteneur/pod, % de la limite consommé (prod), CPU et heap de la JVM, nombre d'instances |
+| Crashs | redémarrages de conteneurs sur 15 min |
 
 - **Staging** : Prometheus collecte le back-end et cAdvisor (métriques des conteneurs).
 - **Prod** : kube-prometheus-stack ; un **ServiceMonitor** fait collecter `/actuator/prometheus` sur chaque pod
   back-end, y compris ceux créés par le HPA. Les composants que k3s n'expose pas (controller-manager, scheduler,
   etcd, kube-proxy) sont désactivés pour éviter de fausses alertes.
 
-## 10. Centralisation des logs
+## 10. Centralisation des logs et tracing
 
 - En staging : **Alloy** lit les logs de tous les conteneurs via l'API Docker et les envoie à **Loki**.
   Il ajoute les labels `service` et `level` (niveau lu dans le format de chaque composant).
 - Les stack traces Java sur plusieurs lignes sont regroupées en un seul log.
 - Les logs de Loki et d'Alloy sont exclus pour éviter une boucle.
-- Dashboard Grafana **Logs** : lignes par niveau, recherche par service.
+- Dashboard Grafana **Logs** : lignes par niveau, filtres par **service**, par **niveau** et par texte ; la recherche
+  par **date** se fait avec la plage de temps de Grafana.
+- Composants qui envoient leurs logs : front (nginx), back (Spring Boot), PostgreSQL, Prometheus, Grafana, cAdvisor.
+- Choix de **Loki** plutôt qu'ELK : beaucoup plus léger (il indexe les labels, pas tout le texte), et il s'affiche
+  dans le même Grafana que les métriques.
+
+### Tracing distribué
+
+Solution retenue : **OpenTelemetry** (standard ouvert) avec **Grafana Tempo** comme stockage.
+- Le back-end Spring Boot s'instrumente avec Micrometer Tracing et l'exporteur OTLP : chaque requête HTTP reçoit un
+  identifiant de trace, propagé dans les appels sortants (en-tête W3C `traceparent`).
+- Tempo reçoit les traces en OTLP ; Grafana les affiche et permet de passer d'une trace aux logs Loki de la même
+  requête (l'identifiant de trace est écrit dans chaque ligne de log).
+- Pourquoi ce choix : OpenTelemetry est indépendant de l'outil de stockage (on pourrait passer à Jaeger ou Zipkin sans
+  toucher au code), et Tempo s'intègre au Grafana déjà en place.
 
 ## 11. Choix techniques et outils
 
@@ -204,7 +243,23 @@ Tableau de bord **Golden signals** (le même en staging et en prod) :
 | SpotBugs signalait 16 alertes, toutes des faux positifs connus avec Spring/JPA/Lombok | Exclusions ciblées et justifiées une par une dans `spotbugs-exclude.xml` ; tout autre bug fait échouer le build |
 | Échec ponctuel du job Back-end : Maven Central injoignable pendant le téléchargement du wrapper Maven | Relance du job ; amélioration possible : cache de `~/.m2/wrapper` |
 
-## 14. Limites et améliorations possibles
+## 14. Maintenance : opérations qui peuvent couper le service
+
+Le détail et les procédures sont dans [maintenance.md](maintenance.md). Les principales :
+
+| Opération | Risque | Parade |
+|---|---|---|
+| Drainer ou redémarrer la VM de PostgreSQL | **coupure totale** : 1 seule réplique, volume local attaché à la VM | fenêtre de maintenance, sauvegarde `pg_dump` avant |
+| Redémarrer vm1 (serveur k3s) | plus de déploiement, d'auto-scaling ni de mode pull | hors heures d'usage ; à terme 3 serveurs |
+| Changer `db_password` | **coupure totale** : PostgreSQL ne prend le mot de passe qu'à la création | `ALTER USER` d'abord, puis vault, puis `rollout restart` |
+| Changer la version majeure de PostgreSQL | **coupure totale** : format de données incompatible | dump / restauration |
+| Supprimer le namespace ou le PVC | **perte de données** | jamais sans sauvegarde |
+| Migration de schéma destructive | erreurs pendant le rolling update | *expand / contract* |
+| Redémarrer le PC hôte | **coupure totale** (VM arrêtées) | procédure de reprise documentée |
+
+Avant toute opération : mettre le mode pull en pause (`/etc/jat-pull.pause`) et sauvegarder la base.
+
+## 15. Limites et améliorations possibles
 
 - **Traces distribuées** : non mises en place. Étape suivante : Micrometer Tracing + OpenTelemetry dans le back-end,
   envoi vers Grafana Tempo, et liens entre traces, logs et métriques dans Grafana.
@@ -214,10 +269,10 @@ Tableau de bord **Golden signals** (le même en staging et en prod) :
 - **Base de données** : volume local sur une seule VM ; en vraie prod, base managée ou stockage répliqué.
 - **Mode pull** : remplaçable par un outil GitOps (Argo CD, Flux) qui suivrait aussi les manifests, pas seulement les images.
 
-## 15. Répartition des rôles
+## 16. Répartition des rôles
 
 | Membre | Rôle | Réalisations principales |
 |---|---|---|
 | **Mariam FATHALLAH** | Développement, conteneurs, CI/CD, logs | Restructuration du dépôt, correctifs 401 (login) et CORS (nginx), Dockerfile front + nginx, pipeline GitHub Actions et publication des images, analyse statique SpotBugs et rapports, déploiement automatique du staging (runner auto-hébergé), centralisation des logs (Loki + Alloy) |
 | **Basma MORABIT** | Staging et supervision | Environnement staging docker compose, Prometheus + cAdvisor + dashboard golden signals, script de déploiement staging avec rollback, revues de code |
-| **Siham AIDROUS** | Production Kubernetes | Cluster k3s sur 2 VM avec Ansible, manifests Kubernetes, rolling update, HPA, déploiement continu en mode pull, supervision de la prod (kube-prometheus-stack) |
+| **Siham AIDROUS** | Production Kubernetes | Cluster k3s sur 2 VM avec Ansible, manifests Kubernetes, rolling update, HPA, déploiement continu en mode pull, supervision de la prod (kube-prometheus-stack), playbook d'installation de Docker pour le staging, documentation de maintenance |

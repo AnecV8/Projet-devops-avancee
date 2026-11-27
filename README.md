@@ -15,13 +15,13 @@ flowchart LR
   dev[Développeur] -->|push / PR| gh[GitHub]
   gh --> ci[GitHub Actions<br/>tests, lint, hadolint]
   ci -->|main uniquement| hub[(Docker Hub<br/>jat-backend / jat-frontend<br/>tag = SHA court)]
-  hub -->|runner CI : deploy-staging| stg[Staging<br/>docker compose]
+  hub -->|job deploy-staging<br/>runner auto-hébergé| stg[Staging<br/>docker compose]
   hub -->|pull chaque minute<br/>jat-pull.sh| prod[Prod k3s<br/>vm1 + vm2]
 ```
 
 | Environnement | Où | Comment il est déployé |
 |---|---|---|
-| Staging | une machine avec Docker | **pipeline** : un runner GitHub auto-hébergé lance `deploy-staging` (pull de l'image publiée, health check, rollback automatique) ; ou à la main avec le script |
+| Staging | une machine avec Docker | automatique par la CI après chaque publication d'images (`deploy-staging.ps1`) : pull, health check, rollback ; sur une VM Linux vierge : `ansible/docker.yml` |
 | Production | cluster k3s sur 2 VM (Multipass) | Ansible pour l'installation, puis **mode pull** : la VM récupère elle-même chaque nouvelle image |
 
 ## Structure du dépôt
@@ -34,7 +34,7 @@ staging/             docker-compose du staging + scripts de déploiement (.sh et
 ansible/             Installation du cluster k3s, déploiement de l'appli, mode pull, monitoring prod
 k8s/                 Manifests Kubernetes (Kustomize) : postgres, backend, frontend, ingress, HPA
 monitoring/          Prometheus, Grafana (dashboards golden signals + logs), Loki/Alloy, values Helm prod
-docs/                Dossier de projet ; archive du projet CI/CD Jenkins précédent
+docs/                Dossier de projet, procédures de maintenance, archive du projet Jenkins précédent
 docker-compose.yml   Base PostgreSQL seule, pour développer l'appli en local
 ```
 
@@ -42,25 +42,43 @@ docker-compose.yml   Base PostgreSQL seule, pour développer l'appli en local
 
 Fichier : [.github/workflows/ci.yml](.github/workflows/ci.yml). Il se lance sur chaque pull request et sur chaque push sur `main`.
 
-1. **Back-end** : `./mvnw verify` : tests unitaires sur H2, couverture JaCoCo minimale 50 %, et **analyse statique SpotBugs**
-   (le build échoue si un bug est trouvé ; faux positifs Spring/JPA exclus et justifiés dans `app/backend/spotbugs-exclude.xml`).
-   Les rapports (tests, couverture, SpotBugs) sont conservés 14 jours comme artefacts du run.
+1. **Back-end** : `./mvnw verify` (tests unitaires sur H2, couverture JaCoCo minimale 50 %, analyse statique SpotBugs).
 2. **Intégration** : l'API est lancée avec un vrai PostgreSQL et on teste register + login.
 3. **Front-end** : `npm run lint` (ESLint), `npm run test:run` (Vitest), `npm run build`.
 4. **Dockerfiles** : analyse hadolint.
 5. **Images** (seulement sur `main`, si tout est vert) : build et push sur Docker Hub de
    `jat-backend` et `jat-frontend`, tagués avec le SHA court du commit (et `latest`).
-6. **Déploiement en staging** (seulement sur `main`, après les images) : un runner GitHub auto-hébergé, installé sur la machine
-   du staging, lance `deploy-staging.ps1` avec le tag publié (santé, smoke test, rollback). Résultat visible dans l'onglet
-   Actions et dans *Deployments > staging*.
-
-`main` est protégée : pull request obligatoire et 4 contrôles requis (Back-end, Intégration, Front-end, Dockerfiles).
+6. **Déploiement staging** : sur un runner GitHub auto-hébergé (labels `self-hosted`, `staging`) installé sur la
+   machine de staging, qui lance `staging/deploy-staging.ps1` avec le tag publié.
 
 Secrets GitHub nécessaires : `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`.
 
 ## 2. Staging (docker compose)
 
-Prérequis : Docker et Docker Compose. Toutes les commandes se lancent depuis `staging/`.
+### Automatique (CI)
+
+À chaque merge sur `main`, le job `deploy-staging` déploie la nouvelle version : rien à faire.
+
+### Sur une VM Linux vierge, avec Ansible
+
+Créer la VM (PowerShell) puis renseigner son IP dans `ansible/inventory.ini`, groupe `[staging]` :
+
+```powershell
+multipass launch 24.04 --name vm3 --cpus 2 --memory 4G --disk 15G --cloud-init C:\Users\Public\cloud-init.yml
+multipass list
+```
+
+```bash
+cd ansible
+ansible-playbook docker.yml --ask-vault-pass
+```
+
+Le playbook installe Docker Engine et le plugin Compose, récupère le dépôt dans `/opt/jat-staging` et lance le
+script de déploiement avec les secrets du vault. Les URL ci-dessous sont alors sur `http://<IP vm3>:<port>`.
+
+### À la main, sur une machine qui a déjà Docker
+
+Toutes les commandes se lancent depuis `staging/`.
 
 ```bash
 cd staging
@@ -83,18 +101,6 @@ Sous Windows : `.\deploy-staging.ps1`.
 
 Pour construire les images depuis le code local plutôt que Docker Hub : `docker compose up -d --build`
 (sans les variables `DH`/`TAG`). Les détails sont en tête de `staging/docker-compose.yml`.
-
-### Déploiement automatique depuis la CI (installation unique)
-
-Sur la machine du staging (Docker démarré), installer un runner GitHub auto-hébergé avec le label `staging`
-(*Settings > Actions > Runners > New self-hosted runner*, réservé aux admins du dépôt), puis :
-
-```powershell
-./config.cmd --url https://github.com/AnecV8/Projet-devops-avancee --token <TOKEN> --name staging-<machine> --labels staging
-./run.cmd    # pas en service Windows : le runner doit accéder au Docker de l'utilisateur
-```
-
-Ensuite, chaque fusion sur `main` déploie le staging. *Actions > CI/CD > Run workflow* relance toute la chaîne.
 
 ## 3. Production (k3s sur 2 VM, avec Ansible)
 
@@ -171,6 +177,11 @@ kubectl -n jat rollout undo deployment/backend
 ssh ubuntu@<IP vm1> sudo rm /etc/jat-pull.pause
 ```
 
+## Maintenance
+
+Les opérations qui peuvent couper le service (VM de PostgreSQL, serveur k3s, mot de passe de la base…) et leurs
+procédures sûres sont dans [docs/maintenance.md](docs/maintenance.md).
+
 ## Sécurité
 
 - Aucun secret dans Git : GitHub Secrets pour la CI, **ansible-vault** (chiffré AES256) pour la prod.
@@ -185,4 +196,3 @@ Voir [app/README.md](app/README.md). `docker compose up -d` à la racine démarr
 
 Le code reprend le projet CI/CD Jenkins précédent (tag `base-cicd-jenkins`, archive dans `docs/archive-cicd-jenkins`).
 Jenkins, Nexus et le déploiement Docker/OpenTofu ont été remplacés par GitHub Actions et Kubernetes.
-
