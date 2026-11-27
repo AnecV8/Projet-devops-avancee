@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Faux positifs SpotBugs connus avec Spring, JPA, Lombok et les records Java.
+     Chaque exclusion est justifiée ; tout autre bug fait échouer le build. -->
+<FindBugsFilter>
+    <!-- DTO (records), entités JPA et objets injectés par Spring : partager la référence est voulu -->
+    <Match>
+        <Bug pattern="EI_EXPOSE_REP,EI_EXPOSE_REP2"/>
+    </Match>
+    <!-- Bean Spring : Keys.hmacShaKeyFor refuse une clé trop courte et l'appli ne démarre pas.
+         L'attaque par finaliseur sur un objet à moitié construit ne s'applique pas à un singleton Spring. -->
+    <Match>
+        <Class name="com.fathallah.jobapplicationtracker.security.JwtService"/>
+        <Bug pattern="CT_CONSTRUCTOR_THROW"/>
+    </Match>
+    <!-- API sans session (SessionCreationPolicy.STATELESS) : UserPrincipal n'est jamais sérialisé -->
+    <Match>
+        <Class name="com.fathallah.jobapplicationtracker.security.auth.UserPrincipal"/>
+        <Bug pattern="SE_BAD_FIELD"/>
+    </Match>
+</FindBugsFilter>
