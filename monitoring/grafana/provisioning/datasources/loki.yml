@@ -6,3 +6,10 @@ datasources:
     type: loki
     access: proxy
     url: http://loki:3100
+    jsonData:
+      # Dans un log du back, "trace_id=..." devient un lien vers la trace complète dans Tempo
+      derivedFields:
+        - name: TraceID
+          matcherRegex: 'trace_id=(\w+)'
+          url: '$${__value.raw}'
+          datasourceUid: tempo

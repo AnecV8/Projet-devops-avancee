@@ -1,0 +1,25 @@
+# Grafana Tempo : stockage des traces distribuées du STAGING.
+# Le back-end (agent OpenTelemetry) envoie ses traces en OTLP ; Grafana les lit sur le port 3200.
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:                       # OTLP = protocole standard d'OpenTelemetry
+      protocols:
+        http:
+          endpoint: 0.0.0.0:4318
+        grpc:
+          endpoint: 0.0.0.0:4317
+
+storage:
+  trace:
+    backend: local              # fichiers sur disque (suffisant pour un staging)
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+
+compactor:
+  compaction:
+    block_retention: 48h        # on garde 2 jours de traces
