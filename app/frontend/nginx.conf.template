@@ -8,7 +8,8 @@ server {
     # Les appels /api partent vers le back : même origine, donc pas de CORS.
     location /api/ {
         proxy_pass ${BACKEND_URL};
-        proxy_set_header Host $host;
+        # $http_host garde le port (localhost:8080) : Spring voit la même origine que le navigateur
+        proxy_set_header Host $http_host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
 
