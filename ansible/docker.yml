@@ -1,0 +1,90 @@
+# Installe Docker sur la VM de staging (Ubuntu vierge), puis y déploie le staging :
+#   ansible-playbook docker.yml --ask-vault-pass
+# Relancer ce playbook ne change rien si Docker est déjà installé et le staging à jour (idempotence).
+#
+# Pourquoi une VM à part : sur un nœud k3s, Docker modifie les règles iptables (politique FORWARD
+# à DROP) et peut casser le réseau des pods. La prod (k3s) et le staging (Docker) restent séparés.
+
+- name: Installer Docker et déployer le staging
+  hosts: staging
+  become: true
+  vars:
+    staging_dir: /opt/jat-staging
+    repo_url: https://github.com/AnecV8/Projet-devops-avancee.git
+  tasks:
+    # ---------------- Docker Engine (dépôt officiel Docker) ----------------
+    - name: Installer les prérequis
+      ansible.builtin.apt:
+        name: [ca-certificates, curl, git]
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Créer le dossier des clés APT
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Télécharger la clé GPG de Docker
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+
+    - name: Ajouter le dépôt APT de Docker
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch={{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}
+          signed-by=/etc/apt/keyrings/docker.asc]
+          https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+        filename: docker
+        state: present
+
+    - name: Installer Docker Engine et le plugin Compose
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+
+    - name: Démarrer Docker et l'activer au démarrage
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Autoriser l'utilisateur SSH à utiliser Docker sans sudo
+      ansible.builtin.user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: true
+
+    # ---------------- Déploiement du staging ----------------
+    - name: Récupérer le code du dépôt (compose, scripts, config de supervision)
+      ansible.builtin.git:
+        repo: "{{ repo_url }}"
+        dest: "{{ staging_dir }}"
+        version: main
+        depth: 1
+
+    - name: Déployer la dernière version publiée (health check + rollback automatique)
+      ansible.builtin.command: bash {{ staging_dir }}/staging/deploy-staging.sh
+      environment:
+        DH: "{{ dockerhub_user }}"
+        DB_PASSWORD: "{{ db_password }}"
+        JWT_SECRET: "{{ jwt_secret }}"
+        GRAFANA_PASSWORD: "{{ grafana_admin_password }}"
+        HEALTH_TIMEOUT: "180"          # premier démarrage de Spring plus lent sur une petite VM
+      register: staging_deploy
+      # "changed" seulement si la version a vraiment changé (version actuelle différente de la demandée)
+      changed_when: >-
+        (staging_deploy.stdout
+         | regex_findall('Version actuelle : ([^ \n]+) -> version demandée : ([^ \n]+)')
+         | first | default(['', 'x']) | unique | length) > 1
+
+    - name: Afficher le résultat du déploiement
+      ansible.builtin.debug:
+        msg: "{{ staging_deploy.stdout_lines | select('search', 'Version|déployé|ÉCHEC|ROLLBACK') | list }}"
