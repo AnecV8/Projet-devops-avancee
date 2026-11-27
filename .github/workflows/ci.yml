@@ -22,8 +22,18 @@ jobs:
           java-version: '21'
           cache: maven
           cache-dependency-path: app/backend/pom.xml
-      - name: Tests (base H2 en mémoire) et contrôle de couverture JaCoCo
+      - name: Tests, couverture JaCoCo et analyse statique SpotBugs
         run: chmod +x mvnw && ./mvnw -B verify
+      - name: Conserver les rapports (tests, couverture, analyse statique)
+        if: always()                     # aussi quand un test échoue : c'est là qu'on en a besoin
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapports-backend
+          path: |
+            app/backend/target/surefire-reports/
+            app/backend/target/site/jacoco/
+            app/backend/target/spotbugsXml.xml
+          retention-days: 14
 
   integration:
     name: Tests d'intégration (API + PostgreSQL)
