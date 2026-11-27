@@ -99,7 +99,7 @@ flowchart LR
   pr --> f[Front : ESLint + Vitest + build]
   pr --> h[hadolint]
   b & i & f & h -->|main uniquement| img[Build + push Docker Hub<br/>tag = SHA court]
-  img --> stg[Staging : deploy-staging.sh]
+  img --> stg[Staging : runner CI + deploy-staging]
   img --> prod[Prod : pull automatique]
 ```
 
@@ -107,6 +107,10 @@ flowchart LR
 - Chaque pull request est testée avant la fusion. Les images ne sont publiées que depuis `main` et seulement si
   tous les contrôles sont verts.
 - Tag d'image = SHA court du commit : chaque version en prod est reliée à un commit précis.
+- **Analyse statique** : SpotBugs sur le back-end (dans le job Back-end), ESLint sur le front, hadolint sur les Dockerfiles ;
+  les rapports de tests, de couverture et SpotBugs sont conservés comme artefacts du run.
+- **Déploiement du staging par la CI** : après la publication des images, un runner auto-hébergé installé sur la machine
+  du staging (GitHub ne peut pas la joindre) lance `deploy-staging` avec le tag publié ; le résultat est visible dans Actions.
 - **Déploiement continu en mode pull** (demande du professeur) : ce n'est pas la CI qui pousse vers le cluster,
   c'est la VM qui va chercher. `jat-pull.sh` interroge l'API Docker Hub chaque minute, compare le dernier tag à
   l'image en cours et lance `kubectl set image` si besoin. Avantage : la CI n'a aucun accès au cluster
@@ -197,6 +201,8 @@ Tableau de bord **Golden signals** (le même en staging et en prod) :
 | Relancer Ansible affichait toujours `changed` | `kubectl diff` avant chaque apply, Helm relancé seulement si ses entrées changent : `changed=0` |
 | Deux sources de vérité pour la version (Ansible et le pull), relevé en revue de code | Ansible garde la version en place par défaut, ne force que sur `-e app_version=` |
 | Cibles Prometheus DOWN en prod | Composants non exposés par k3s désactivés dans le chart |
+| SpotBugs signalait 16 alertes, toutes des faux positifs connus avec Spring/JPA/Lombok | Exclusions ciblées et justifiées une par une dans `spotbugs-exclude.xml` ; tout autre bug fait échouer le build |
+| Échec ponctuel du job Back-end : Maven Central injoignable pendant le téléchargement du wrapper Maven | Relance du job ; amélioration possible : cache de `~/.m2/wrapper` |
 
 ## 14. Limites et améliorations possibles
 
@@ -204,8 +210,6 @@ Tableau de bord **Golden signals** (le même en staging et en prod) :
   envoi vers Grafana Tempo, et liens entre traces, logs et métriques dans Grafana.
 - **Logs en production** : Loki n'est déployé qu'en staging ; en prod il s'installerait avec le chart Helm
   `loki` et Alloy en DaemonSet.
-- **Déploiement du staging** déclenché par un script et non par la CI (la machine de staging n'est pas joignable
-  depuis GitHub) ; un runner auto-hébergé le rendrait automatique.
 - **Haute disponibilité** : un seul serveur k3s ; il en faudrait 3 pour survivre à la perte du control plane.
 - **Base de données** : volume local sur une seule VM ; en vraie prod, base managée ou stockage répliqué.
 - **Mode pull** : remplaçable par un outil GitOps (Argo CD, Flux) qui suivrait aussi les manifests, pas seulement les images.
@@ -214,6 +218,6 @@ Tableau de bord **Golden signals** (le même en staging et en prod) :
 
 | Membre | Rôle | Réalisations principales |
 |---|---|---|
-| **Mariam FATHALLAH** | Développement, conteneurs, CI/CD, logs | Restructuration du dépôt, correctif 401 au login, Dockerfile front + nginx, pipeline GitHub Actions et publication des images, centralisation des logs (Loki + Alloy) |
+| **Mariam FATHALLAH** | Développement, conteneurs, CI/CD, logs | Restructuration du dépôt, correctifs 401 (login) et CORS (nginx), Dockerfile front + nginx, pipeline GitHub Actions et publication des images, analyse statique SpotBugs et rapports, déploiement automatique du staging (runner auto-hébergé), centralisation des logs (Loki + Alloy) |
 | **Basma MORABIT** | Staging et supervision | Environnement staging docker compose, Prometheus + cAdvisor + dashboard golden signals, script de déploiement staging avec rollback, revues de code |
 | **Siham AIDROUS** | Production Kubernetes | Cluster k3s sur 2 VM avec Ansible, manifests Kubernetes, rolling update, HPA, déploiement continu en mode pull, supervision de la prod (kube-prometheus-stack) |
