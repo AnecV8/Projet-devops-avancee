@@ -15,13 +15,13 @@ flowchart LR
   dev[Développeur] -->|push / PR| gh[GitHub]
   gh --> ci[GitHub Actions<br/>tests, lint, hadolint]
   ci -->|main uniquement| hub[(Docker Hub<br/>jat-backend / jat-frontend<br/>tag = SHA court)]
-  hub -->|deploy-staging.sh| stg[Staging<br/>docker compose]
+  hub -->|runner CI : deploy-staging| stg[Staging<br/>docker compose]
   hub -->|pull chaque minute<br/>jat-pull.sh| prod[Prod k3s<br/>vm1 + vm2]
 ```
 
 | Environnement | Où | Comment il est déployé |
 |---|---|---|
-| Staging | une machine avec Docker | `staging/deploy-staging.sh` : pull de la dernière image, health check, rollback automatique |
+| Staging | une machine avec Docker | **pipeline** : un runner GitHub auto-hébergé lance `deploy-staging` (pull de l'image publiée, health check, rollback automatique) ; ou à la main avec le script |
 | Production | cluster k3s sur 2 VM (Multipass) | Ansible pour l'installation, puis **mode pull** : la VM récupère elle-même chaque nouvelle image |
 
 ## Structure du dépôt
@@ -42,12 +42,19 @@ docker-compose.yml   Base PostgreSQL seule, pour développer l'appli en local
 
 Fichier : [.github/workflows/ci.yml](.github/workflows/ci.yml). Il se lance sur chaque pull request et sur chaque push sur `main`.
 
-1. **Back-end** : `./mvnw verify` (tests unitaires sur H2, couverture JaCoCo minimale 50 %).
+1. **Back-end** : `./mvnw verify` : tests unitaires sur H2, couverture JaCoCo minimale 50 %, et **analyse statique SpotBugs**
+   (le build échoue si un bug est trouvé ; faux positifs Spring/JPA exclus et justifiés dans `app/backend/spotbugs-exclude.xml`).
+   Les rapports (tests, couverture, SpotBugs) sont conservés 14 jours comme artefacts du run.
 2. **Intégration** : l'API est lancée avec un vrai PostgreSQL et on teste register + login.
 3. **Front-end** : `npm run lint` (ESLint), `npm run test:run` (Vitest), `npm run build`.
 4. **Dockerfiles** : analyse hadolint.
 5. **Images** (seulement sur `main`, si tout est vert) : build et push sur Docker Hub de
    `jat-backend` et `jat-frontend`, tagués avec le SHA court du commit (et `latest`).
+6. **Déploiement en staging** (seulement sur `main`, après les images) : un runner GitHub auto-hébergé, installé sur la machine
+   du staging, lance `deploy-staging.ps1` avec le tag publié (santé, smoke test, rollback). Résultat visible dans l'onglet
+   Actions et dans *Deployments > staging*.
+
+`main` est protégée : pull request obligatoire et 4 contrôles requis (Back-end, Intégration, Front-end, Dockerfiles).
 
 Secrets GitHub nécessaires : `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`.
 
@@ -76,6 +83,18 @@ Sous Windows : `.\deploy-staging.ps1`.
 
 Pour construire les images depuis le code local plutôt que Docker Hub : `docker compose up -d --build`
 (sans les variables `DH`/`TAG`). Les détails sont en tête de `staging/docker-compose.yml`.
+
+### Déploiement automatique depuis la CI (installation unique)
+
+Sur la machine du staging (Docker démarré), installer un runner GitHub auto-hébergé avec le label `staging`
+(*Settings > Actions > Runners > New self-hosted runner*, réservé aux admins du dépôt), puis :
+
+```powershell
+./config.cmd --url https://github.com/AnecV8/Projet-devops-avancee --token <TOKEN> --name staging-<machine> --labels staging
+./run.cmd    # pas en service Windows : le runner doit accéder au Docker de l'utilisateur
+```
+
+Ensuite, chaque fusion sur `main` déploie le staging. *Actions > CI/CD > Run workflow* relance toute la chaîne.
 
 ## 3. Production (k3s sur 2 VM, avec Ansible)
 
