@@ -21,7 +21,7 @@ flowchart LR
 
 | Environnement | Où | Comment il est déployé |
 |---|---|---|
-| Staging | une machine avec Docker | **pipeline** : un runner GitHub auto-hébergé lance `deploy-staging` (pull de l'image publiée, health check, rollback automatique) ; ou à la main avec le script |
+| Staging | une machine avec Docker | **pipeline** : un runner GitHub auto-hébergé lance `deploy-staging` (pull de l'image publiée, health check, rollback automatique) ; ou à la main avec le script ; sur une VM Linux vierge, Docker et le staging s'installent avec `ansible/docker.yml` |
 | Production | cluster k3s sur 2 VM (Multipass) | Ansible pour l'installation, puis **mode pull** : la VM récupère elle-même chaque nouvelle image |
 
 ## Structure du dépôt
@@ -34,7 +34,7 @@ staging/             docker-compose du staging + scripts de déploiement (.sh et
 ansible/             Installation du cluster k3s, déploiement de l'appli, mode pull, monitoring prod
 k8s/                 Manifests Kubernetes (Kustomize) : postgres, backend, frontend, ingress, HPA
 monitoring/          Prometheus, Grafana (dashboards golden signals + logs), Loki/Alloy, values Helm prod
-docs/                Dossier de projet ; archive du projet CI/CD Jenkins précédent
+docs/                Dossier de projet, procédures de maintenance, archive du projet Jenkins précédent
 docker-compose.yml   Base PostgreSQL seule, pour développer l'appli en local
 ```
 
@@ -60,7 +60,26 @@ Secrets GitHub nécessaires : `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`.
 
 ## 2. Staging (docker compose)
 
-Prérequis : Docker et Docker Compose. Toutes les commandes se lancent depuis `staging/`.
+### Sur une VM Linux vierge, avec Ansible
+
+Créer la VM (PowerShell) puis renseigner son IP dans `ansible/inventory.ini`, groupe `[staging]` :
+
+```powershell
+multipass launch 24.04 --name vm3 --cpus 2 --memory 4G --disk 15G --cloud-init C:\Users\Public\cloud-init.yml
+multipass list
+```
+
+```bash
+cd ansible
+ansible-playbook docker.yml --ask-vault-pass
+```
+
+Le playbook installe Docker Engine et le plugin Compose, récupère le dépôt dans `/opt/jat-staging` et lance le
+script de déploiement avec les secrets du vault. Les URL ci-dessous sont alors sur `http://<IP vm3>:<port>`.
+
+### À la main, sur une machine qui a déjà Docker
+
+Toutes les commandes se lancent depuis `staging/`.
 
 ```bash
 cd staging
@@ -87,12 +106,28 @@ Pour construire les images depuis le code local plutôt que Docker Hub : `docker
 ### Déploiement automatique depuis la CI (installation unique)
 
 Sur la machine du staging (Docker démarré), installer un runner GitHub auto-hébergé avec le label `staging`
-(*Settings > Actions > Runners > New self-hosted runner*, réservé aux admins du dépôt), puis :
+(*Settings > Actions > Runners > New self-hosted runner*, réservé aux admins du dépôt).
+
+**Sur un PC Windows** (onglet *Windows*), puis :
 
 ```powershell
 ./config.cmd --url https://github.com/AnecV8/Projet-devops-avancee --token <TOKEN> --name staging-<machine> --labels staging
 ./run.cmd    # pas en service Windows : le runner doit accéder au Docker de l'utilisateur
 ```
+
+**Sur la VM Linux du staging (vm3, installée par `ansible/docker.yml`)** : même page GitHub, onglet *Linux*, puis :
+
+```bash
+ssh ubuntu@<IP vm3>
+mkdir actions-runner && cd actions-runner
+# télécharger et extraire l'archive indiquée sur la page GitHub (curl -o ... puis tar xzf ...)
+./config.sh --url https://github.com/AnecV8/Projet-devops-avancee --token <TOKEN> --name staging-vm3 --labels staging --unattended
+sudo ./svc.sh install ubuntu     # service systemd, lancé en tant que ubuntu (membre du groupe docker)
+sudo ./svc.sh start
+```
+
+Le job `deploy-staging` détecte le système du runner : `deploy-staging.ps1` sous Windows, `deploy-staging.sh` sous Linux
+(avec les secrets de `/etc/jat-staging.env`, écrit par Ansible depuis le vault).
 
 Ensuite, chaque fusion sur `main` déploie le staging. *Actions > CI/CD > Run workflow* relance toute la chaîne.
 
@@ -171,6 +206,11 @@ kubectl -n jat rollout undo deployment/backend
 ssh ubuntu@<IP vm1> sudo rm /etc/jat-pull.pause
 ```
 
+## Maintenance
+
+Les opérations qui peuvent couper le service (VM de PostgreSQL, serveur k3s, mot de passe de la base…) et leurs
+procédures sûres sont dans [docs/maintenance.md](docs/maintenance.md).
+
 ## Sécurité
 
 - Aucun secret dans Git : GitHub Secrets pour la CI, **ansible-vault** (chiffré AES256) pour la prod.
@@ -185,4 +225,3 @@ Voir [app/README.md](app/README.md). `docker compose up -d` à la racine démarr
 
 Le code reprend le projet CI/CD Jenkins précédent (tag `base-cicd-jenkins`, archive dans `docs/archive-cicd-jenkins`).
 Jenkins, Nexus et le déploiement Docker/OpenTofu ont été remplacés par GitHub Actions et Kubernetes.
-
