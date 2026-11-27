@@ -142,13 +142,34 @@ jobs:
       url: http://localhost:8080
     steps:
       - uses: actions/checkout@v4
-      - name: Déployer la version publiée (santé, smoke test, rollback si échec)
+
+      # Runner Windows (PC d'un membre de l'équipe) : script PowerShell
+      - name: Déployer la version publiée (Windows)
+        if: runner.os == 'Windows'
         working-directory: staging
         shell: cmd
         env:
           DH: ${{ secrets.DOCKERHUB_USERNAME }}
         run: powershell -NoProfile -ExecutionPolicy Bypass -File deploy-staging.ps1 ${{ needs.images.outputs.tag }}
-      - name: Résumé
-        if: always()
+
+      # Runner Linux (VM de staging installée par ansible/docker.yml) : script bash.
+      # Les secrets du staging sont dans /etc/jat-staging.env, écrit par Ansible depuis le vault.
+      - name: Déployer la version publiée (Linux)
+        if: runner.os != 'Windows'
+        working-directory: staging
+        shell: bash
+        run: |
+          set -a; . /etc/jat-staging.env; set +a
+          bash deploy-staging.sh ${{ needs.images.outputs.tag }}
+
+      - name: Résumé (Windows)
+        if: always() && runner.os == 'Windows'
         shell: cmd
-        run: echo ### Staging : version ${{ needs.images.outputs.tag }} - ${{ job.status }} >> "%GITHUB_STEP_SUMMARY%"
+        run: |
+          echo ### Staging : version ${{ needs.images.outputs.tag }} - ${{ job.status }} >> "%GITHUB_STEP_SUMMARY%"
+
+      - name: Résumé (Linux)
+        if: always() && runner.os != 'Windows'
+        shell: bash
+        run: |
+          echo "### Staging : version ${{ needs.images.outputs.tag }} - ${{ job.status }}" >> "$GITHUB_STEP_SUMMARY"
