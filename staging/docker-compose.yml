@@ -107,8 +107,31 @@ services:
       - "${GRAFANA_PORT:-3000}:3000"          # http://localhost:3000 (admin / admin)
     depends_on:
       - prometheus
+      - loki
+    restart: unless-stopped
+
+  loki:
+    # Stockage des logs (configuration locale fournie par l'image : fichiers sur disque)
+    image: grafana/loki:3.5.0
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki-data:/loki                       # les logs survivent à un "down"
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    restart: unless-stopped
+
+  alloy:
+    # Collecte les logs de chaque conteneur via l'API Docker, ajoute service + level, envoie à Loki
+    image: grafana/alloy:v1.9.0
+    command: run /etc/alloy/config.alloy --storage.path=/var/lib/alloy/data
+    volumes:
+      - ../monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
     restart: unless-stopped
 
 volumes:
   db-data:
   prometheus-data:
+  loki-data:
