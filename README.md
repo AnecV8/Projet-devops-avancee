@@ -15,7 +15,7 @@ flowchart LR
   dev[Développeur] -->|push / PR| gh[GitHub]
   gh --> ci[GitHub Actions<br/>tests, lint, hadolint]
   ci -->|main uniquement| hub[(Docker Hub<br/>jat-backend / jat-frontend<br/>tag = SHA court)]
-  hub -->|runner CI : deploy-staging| stg[Staging<br/>docker compose<br/>+ métriques, logs, traces]
+  hub -->|runner CI : deploy-staging| stg[Staging<br/>docker compose<br/>+ métriques, logs]
   hub -->|pull chaque minute<br/>jat-pull.sh| prod[Prod k3s<br/>vm1 + vm2]
 ```
 
@@ -33,7 +33,7 @@ app/frontend         Frontend React / Vite servi par nginx (Dockerfile multi-sta
 staging/             docker-compose du staging + scripts de déploiement (.sh et .ps1)
 ansible/             Installation du cluster k3s, déploiement de l'appli, mode pull, monitoring prod
 k8s/                 Manifests Kubernetes (Kustomize) : postgres, backend, frontend, ingress, HPA
-monitoring/          Prometheus, Grafana (dashboards golden signals + logs), Loki/Alloy, Tempo, values Helm prod
+monitoring/          Prometheus, Grafana (dashboards golden signals + logs), Loki/Alloy, values Helm prod
 docs/                Dossier de projet, procédures de maintenance, archive du projet Jenkins précédent
 docker-compose.yml   Base PostgreSQL seule, pour développer l'appli en local
 ```
@@ -95,15 +95,10 @@ Sous Windows : `.\deploy-staging.ps1`.
 |---|---|
 | Application | http://localhost:8080 |
 | API | http://localhost:8082 |
-| Grafana (golden signals + logs + traces) | http://localhost:3000 |
+| Grafana (golden signals + logs) | http://localhost:3000 |
 | Prometheus | http://localhost:9090 |
 | cAdvisor | http://localhost:8081 |
 | Loki | http://localhost:3100 |
-| Tempo (traces) | http://localhost:3200 |
-
-Traces distribuées : Grafana > **Explore** > source **Tempo** > Search, service `jat-backend`. Une trace montre chaque
-étape d'une requête (HTTP, Spring, SQL) ; « Logs for this span » ouvre les logs de la même requête (quand
-l'application en a écrit : connexion, avertissement, erreur).
 
 Pour construire les images depuis le code local plutôt que Docker Hub : `docker compose up -d --build`
 (sans les variables `DH`/`TAG`). Les détails sont en tête de `staging/docker-compose.yml`.

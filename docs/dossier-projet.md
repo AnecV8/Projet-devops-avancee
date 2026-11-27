@@ -21,7 +21,6 @@ flowchart TB
     sfront[frontend nginx] --> sback[backend Spring Boot] --> sdb[(PostgreSQL)]
     sprom[Prometheus + cAdvisor] --> sgraf[Grafana]
     salloy[Alloy] --> sloki[Loki] --> sgraf
-    sback -.->|traces OTLP| stempo[Tempo] --> sgraf
   end
 
   subgraph Prod["Production : k3s sur 2 VM"]
@@ -69,7 +68,6 @@ flowchart TB
 | Config | variables d'environnement du compose | ConfigMap + Secret Kubernetes |
 | Supervision | Prometheus + cAdvisor + Grafana | kube-prometheus-stack (Prometheus Operator + Grafana) |
 | Logs | Loki + Alloy | — (voir limites) |
-| Traces | OpenTelemetry (agent Java) + Tempo | — (voir limites) |
 
 ### Architecture Kubernetes (namespace `jat`)
 
@@ -202,21 +200,12 @@ Tableau de bord **Golden signals** (le même en staging et en prod) :
 
 ### Tracing distribué
 
-Solution retenue : **OpenTelemetry** (standard ouvert) avec **Grafana Tempo** comme stockage, en staging.
-- **Agent Java OpenTelemetry**, sans aucune modification du code ni de l'image : un conteneur d'initialisation
-  (`otel-agent`, version figée 2.33.1) copie l'agent dans un volume partagé, et le back le charge au démarrage via
-  `JAVA_TOOL_OPTIONS=-javaagent:...`. La configuration passe par des variables `OTEL_*` (12-factor).
-- Chaque requête devient une trace : entrée HTTP (Tomcat), Spring Data, Hibernate, requêtes SQL (JDBC), avec la durée
-  de chaque étape. L'identifiant de trace est propagé dans les appels sortants (en-tête W3C `traceparent`).
-- Tempo reçoit les traces en OTLP (port 4318) et les garde 48 h.
-- **Corrélation logs ↔ traces** : le `trace_id` est écrit dans chaque ligne de log du back
-  (`LOGGING_PATTERN_CORRELATION`). Dans Grafana, un log Loki ouvre sa trace, et une trace ouvre ses logs
-  (« Logs for this span »). Une trace n'a des logs que si l'application en a écrit pendant la requête (connexion,
-  avertissement, erreur) : une simple lecture de la liste n'en produit pas.
-- Pourquoi ce choix : OpenTelemetry est indépendant de l'outil de stockage (on pourrait passer à Jaeger ou Zipkin sans
-  toucher au back), l'agent évite de modifier le code, et Tempo s'intègre au Grafana déjà en place : métriques, logs et
-  traces au même endroit.
-- Consultation : Grafana > Explore > Tempo > Search (service `jat-backend`).
+**Étudié, non mis en place** (l'énoncé ne le demande pas).
+- Solution retenue : **OpenTelemetry** (standard ouvert), avec **Grafana Tempo** comme stockage, pour rester dans le
+  Grafana déjà en place (métriques, logs et traces au même endroit) ; Zipkin a été écarté (interface séparée).
+- Mise en œuvre envisagée : l'**agent Java OpenTelemetry**, chargé au démarrage du back par une variable
+  d'environnement (`JAVA_TOOL_OPTIONS`), sans modifier le code ni l'image. Chaque requête deviendrait une trace
+  (HTTP, Spring, requêtes SQL), et l'identifiant de trace écrit dans les logs relierait Loki et Tempo.
 
 ## 11. Choix techniques et outils
 
@@ -230,7 +219,6 @@ Solution retenue : **OpenTelemetry** (standard ouvert) avec **Grafana Tempo** co
 | Manifests | Kustomize | inclus dans kubectl, permet de changer le tag d'image sans toucher la base |
 | Supervision prod | kube-prometheus-stack (Helm) | Prometheus Operator + Grafana + exporters en une installation |
 | Logs | Loki + Alloy | même Grafana que les métriques, léger, s'appuie sur des labels |
-| Traces | OpenTelemetry (agent Java) + Tempo | standard ouvert, aucune modification du code, même Grafana |
 | Secrets | GitHub Secrets, ansible-vault | jamais en clair dans Git |
 
 ## 12. Pratiques DevOps appliquées
@@ -242,7 +230,7 @@ Solution retenue : **OpenTelemetry** (standard ouvert) avec **Grafana Tempo** co
 - **Tests automatiques** à chaque PR, et seuil de couverture minimale.
 - **Idempotence** des playbooks.
 - **Déploiement continu** sans intervention humaine, avec retour arrière possible.
-- **Observabilité** : métriques (4 golden signals), logs centralisés et traces distribuées dans un seul Grafana.
+- **Observabilité** : métriques (4 golden signals) et logs centralisés dans un seul Grafana.
 
 ## 13. Difficultés rencontrées et solutions
 
@@ -255,7 +243,6 @@ Solution retenue : **OpenTelemetry** (standard ouvert) avec **Grafana Tempo** co
 | Le dashboard Grafana ne se chargeait pas : le volume (`/var/lib/grafana/dashboards`) ne correspondait pas au chemin du provisioning | Volume monté sur `/etc/grafana/dashboards`, le chemin déclaré dans `dashboards.yml` |
 | Ports du staging déjà occupés par les conteneurs de l'ancien projet Jenkins | Ports rendus configurables par variables (`BACKEND_PORT`, `GRAFANA_PORT`…) |
 | Le bug CORS n'apparaissait qu'avec l'application complète | Découvert grâce au staging, corrigé avant la prod : c'est le rôle du staging |
-| Tempo ne pouvait pas écrire dans son volume (l'image tourne avec un utilisateur non root) | `user: "0"` en staging ; amélioration possible : donner les droits au volume |
 | Boucle de logs (chaque envoi de Loki/Alloy créait un log) | Exclusion des services loki et alloy dans Alloy |
 | Stack traces Java découpées en dizaines de lignes | Étape `multiline` dans Alloy |
 | WSL ne joignait pas les VM Multipass (deux réseaux Hyper-V séparés) | Activer le forwarding sur les deux interfaces (à refaire après redémarrage) |
@@ -288,8 +275,8 @@ Avant toute opération : mettre le mode pull en pause (`/etc/jat-pull.pause`) et
 
 - **Alertes** : pas encore de notification automatique. Étape suivante : règles Prometheus (back injoignable,
   plus de 1 % de 5xx, latence au-dessus de 0,5 s) et Alertmanager vers Teams ou Slack.
-- **Traces distribuées** : en staging uniquement, et elles commencent au back-end (nginx n'est pas instrumenté).
-  En prod : même agent via un initContainer Kubernetes, et Tempo installé avec son chart Helm.
+- **Traces distribuées** : étudiées mais non mises en place (voir section 10) : agent Java OpenTelemetry et
+  Grafana Tempo, en staging puis en prod (initContainer Kubernetes, chart Helm de Tempo).
 - **Logs en production** : Loki n'est déployé qu'en staging ; en prod il s'installerait avec le chart Helm
   `loki` et Alloy en DaemonSet.
 - **Haute disponibilité** : un seul serveur k3s ; il en faudrait 3 pour survivre à la perte du control plane.
@@ -301,5 +288,5 @@ Avant toute opération : mettre le mode pull en pause (`/etc/jat-pull.pause`) et
 | Membre | Rôle | Réalisations principales |
 |---|---|---|
 | **Mariam FATHALLAH** | Développement, conteneurs, CI/CD, logs | Restructuration du dépôt, correctifs 401 (login) et CORS (nginx), Dockerfile front + nginx, pipeline GitHub Actions et publication des images, analyse statique SpotBugs et rapports, déploiement automatique du staging (runner auto-hébergé), centralisation des logs (Loki + Alloy) |
-| **Basma MORABIT** | Staging et observabilité | Environnement staging docker compose, Prometheus + cAdvisor + Grafana provisionné, dashboard golden signals, script de déploiement staging semi-automatique avec health check et rollback (réutilisé par la CI et par Ansible), tracing distribué (OpenTelemetry + Tempo), revues de code (dont le kubeconfig poussé par erreur) |
+| **Basma MORABIT** | Staging et observabilité | Environnement staging docker compose, Prometheus + cAdvisor + Grafana provisionné, dashboard golden signals, script de déploiement staging semi-automatique avec health check et rollback (réutilisé par la CI et par Ansible), étude du tracing distribué, revues de code (dont le kubeconfig poussé par erreur) |
 | **Siham AIDROUS** | Production Kubernetes | Cluster k3s sur 2 VM avec Ansible, manifests Kubernetes, rolling update, HPA, déploiement continu en mode pull, supervision de la prod (kube-prometheus-stack), playbook d'installation de Docker pour le staging, documentation de maintenance |

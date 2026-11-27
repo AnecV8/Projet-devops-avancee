@@ -18,7 +18,6 @@
 #      PowerShell : .\deploy-staging.ps1 [sha]
 #
 # Supervision : Prometheus http://localhost:9090, Grafana http://localhost:3000, cAdvisor http://localhost:8081
-# Observabilité dans Grafana : métriques (Prometheus), logs (Loki), traces (Tempo, menu Explore)
 #
 # Ports par défaut : front 8080, API 8082. Si un port est déjà pris sur la machine :
 #      bash       : BACKEND_PORT=8092 docker compose up -d
@@ -51,35 +50,12 @@ services:
       SPRING_DATASOURCE_USERNAME: jobtracker
       SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:-staging-pass}
       JWT_SECRET: ${JWT_SECRET:-staging-secret-staging-secret-staging-secret-1234}
-      # Tracing distribué : l'agent OpenTelemetry s'accroche à Java au démarrage (aucune ligne de code,
-      # image inchangée) et envoie une trace par requête à Tempo (HTTP -> Spring -> requêtes SQL).
-      JAVA_TOOL_OPTIONS: -javaagent:/otel/javaagent.jar
-      OTEL_SERVICE_NAME: jat-backend
-      OTEL_RESOURCE_ATTRIBUTES: deployment.environment=staging
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318
-      OTEL_TRACES_EXPORTER: otlp
-      OTEL_METRICS_EXPORTER: none             # les métriques passent déjà par Micrometer/Prometheus
-      OTEL_LOGS_EXPORTER: none                # les logs passent déjà par Alloy/Loki
-      # Ajoute l'identifiant de trace dans chaque ligne de log : lien Loki <-> Tempo dans Grafana
-      LOGGING_PATTERN_CORRELATION: "[trace_id=%X{trace_id}] "
-    volumes:
-      - otel-agent:/otel:ro
     ports:
       - "${BACKEND_PORT:-8082}:8080"          # accès direct à l'API et à /actuator
     depends_on:
       db:
         condition: service_healthy            # Spring attend que PostgreSQL réponde
-      otel-agent:
-        condition: service_completed_successfully   # l'agent est copié avant le démarrage
     restart: unless-stopped
-
-  otel-agent:
-    # Conteneur d'initialisation : copie l'agent Java OpenTelemetry (version figée) dans un volume
-    # partagé avec le back, puis s'arrête. Même principe qu'un initContainer Kubernetes.
-    image: ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-java:2.33.1
-    command: ["cp", "/javaagent.jar", "/otel/javaagent.jar"]
-    volumes:
-      - otel-agent:/otel
 
   frontend:
     image: ${DH:-local}/jat-frontend:${TAG:-latest}
@@ -132,19 +108,6 @@ services:
     depends_on:
       - prometheus
       - loki
-      - tempo
-    restart: unless-stopped
-
-  tempo:
-    # Stockage des traces distribuées (reçues en OTLP depuis l'agent OpenTelemetry du back)
-    image: grafana/tempo:2.10.10
-    command: ["-config.file=/etc/tempo/tempo.yml"]
-    user: "0"                                 # l'image tourne en uid 10001 : droits d'écriture sur le volume
-    volumes:
-      - ../monitoring/tempo/tempo.yml:/etc/tempo/tempo.yml:ro
-      - tempo-data:/var/tempo                 # les traces survivent à un "down"
-    ports:
-      - "${TEMPO_PORT:-3200}:3200"            # API de Tempo (Grafana l'interroge en interne)
     restart: unless-stopped
 
   loki:
@@ -172,5 +135,3 @@ volumes:
   db-data:
   prometheus-data:
   loki-data:
-  tempo-data:
-  otel-agent:
