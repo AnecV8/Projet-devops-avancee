@@ -128,3 +128,27 @@ jobs:
         run: |
           echo "### Images publiées : tag ${{ steps.tag.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
           echo "Déploiement : ansible-playbook deploy.yml -e app_version=${{ steps.tag.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+  deploy-staging:
+    name: Déploiement en staging
+    # Après chaque publication des images sur main : déploie la même version sur le staging
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: images
+    runs-on: [self-hosted, staging]        # runner installé sur la machine du staging (GitHub ne peut pas la joindre)
+    concurrency:
+      group: staging                       # un seul déploiement du staging à la fois
+      cancel-in-progress: false
+    environment:
+      name: staging
+      url: http://localhost:8080
+    steps:
+      - uses: actions/checkout@v4
+      - name: Déployer la version publiée (santé, smoke test, rollback si échec)
+        working-directory: staging
+        shell: cmd
+        env:
+          DH: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File deploy-staging.ps1 ${{ needs.images.outputs.tag }}
+      - name: Résumé
+        if: always()
+        shell: cmd
+        run: echo ### Staging : version ${{ needs.images.outputs.tag }} - ${{ job.status }} >> "%GITHUB_STEP_SUMMARY%"
