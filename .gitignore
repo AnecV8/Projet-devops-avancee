@@ -75,3 +75,4 @@ app/frontend/.env.local
 *.tfstate.*
 *.tfplan
 infra/terraform/plan-*.txt
+ansible/kubeconfig

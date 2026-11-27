@@ -1,0 +1,15 @@
+# Point d'entrée : kubectl apply -k k8s/
+# Base commune : tous les objets vont dans le namespace "jat".
+# Le nom des images Docker Hub et leur tag ne sont PAS ici : Ansible génère sur le serveur
+# un overlay ({{ app_dir }}/overlay/kustomization.yml) qui pointe vers cette base.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: jat
+resources:
+  - namespace.yml
+  - configmap.yml
+  - postgres.yml
+  - backend.yml
+  - frontend.yml
+  - ingress.yml
+  - hpa.yml

@@ -1,0 +1,90 @@
+# Construit TOUTE la prod à partir de 2 VM Ubuntu vierges :
+#   ansible-playbook site.yml --ask-vault-pass
+# Relancer ce playbook ne change rien si tout est déjà en place (idempotence).
+
+- name: 1. Préparer toutes les VM
+  hosts: k3s_cluster
+  become: true
+  tasks:
+    - name: Installer les paquets de base
+      ansible.builtin.apt:
+        name: [curl, ca-certificates, open-iscsi]
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Désactiver le swap (recommandé par Kubernetes)
+      ansible.builtin.command: swapoff -a
+      changed_when: false
+
+    - name: Retirer le swap du démarrage
+      ansible.builtin.replace:
+        path: /etc/fstab
+        regexp: '^([^#].*\sswap\s.*)$'
+        replace: '# \1'
+
+    - name: Télécharger le script d'installation de k3s
+      ansible.builtin.get_url:
+        url: https://get.k3s.io
+        dest: /tmp/k3s-install.sh
+        mode: "0755"
+
+- name: 2. Installer le nœud serveur k3s (control plane)
+  hosts: k3s_server
+  become: true
+  tasks:
+    - name: Installer k3s en mode serveur
+      ansible.builtin.command: /tmp/k3s-install.sh
+      environment:
+        INSTALL_K3S_VERSION: "{{ k3s_version }}"
+        INSTALL_K3S_EXEC: "server --write-kubeconfig-mode 644 --node-ip {{ ansible_host }}"
+      args:
+        creates: /usr/local/bin/k3s          # idempotence : ne réinstalle pas
+
+    - name: Attendre que le nœud soit prêt
+      ansible.builtin.command: k3s kubectl wait --for=condition=Ready node/{{ inventory_hostname }} --timeout=30s
+      register: node_ready
+      until: node_ready.rc == 0     # le nœud n'existe pas encore juste après l'installation : on réessaie
+      retries: 20
+      delay: 10
+      changed_when: false
+
+    - name: Lire le jeton qui permet aux agents de rejoindre le cluster
+      ansible.builtin.slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      register: k3s_token
+
+    - name: Lire le kubeconfig du serveur
+      ansible.builtin.slurp:
+        src: /etc/rancher/k3s/k3s.yaml
+      register: k3s_kubeconfig
+
+    - name: Écrire le kubeconfig sur ton poste, avec l'IP du serveur (pour kubectl en local)
+      ansible.builtin.copy:
+        content: "{{ k3s_kubeconfig.content | b64decode | replace('127.0.0.1', ansible_host) }}"
+        dest: ./kubeconfig
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+
+- name: 3. Joindre le nœud agent au cluster
+  hosts: k3s_agents
+  become: true
+  vars:
+    server_ip: "{{ hostvars[groups['k3s_server'][0]]['ansible_host'] }}"
+    token: "{{ hostvars[groups['k3s_server'][0]]['k3s_token']['content'] | b64decode | trim }}"
+  tasks:
+    - name: Installer k3s en mode agent
+      ansible.builtin.command: /tmp/k3s-install.sh
+      environment:
+        INSTALL_K3S_VERSION: "{{ k3s_version }}"
+        K3S_URL: "https://{{ server_ip }}:6443"
+        K3S_TOKEN: "{{ token }}"
+        INSTALL_K3S_EXEC: "agent --node-ip {{ ansible_host }}"
+      args:
+        creates: /usr/local/bin/k3s-agent-uninstall.sh
+
+- name: 4. Déployer l'application
+  ansible.builtin.import_playbook: deploy.yml
+
+- name: 5. Activer le déploiement continu en mode pull
+  ansible.builtin.import_playbook: pull.yml

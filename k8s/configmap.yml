@@ -1,0 +1,13 @@
+# Configuration non sensible, injectée en variables d'environnement (principe 12-factor)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jat-config
+data:
+  SPRING_PROFILES_ACTIVE: prod
+  SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/jobtracker
+  SPRING_DATASOURCE_USERNAME: jobtracker
+  POSTGRES_DB: jobtracker
+  POSTGRES_USER: jobtracker
+  SERVER_SHUTDOWN: graceful          # Spring termine les requêtes en cours avant de s'arrêter
+  JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=75
