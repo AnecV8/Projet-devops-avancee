@@ -1,0 +1,81 @@
+// Collecte des logs de tous les conteneurs du staging et envoi à Loki.
+// Labels ajoutés : service (nom du service compose), level (niveau de gravité).
+
+discovery.docker "staging" {
+  host = "unix:///var/run/docker.sock"
+  filter {
+    name   = "label"
+    values = ["com.docker.compose.project=jat-staging"]
+  }
+}
+
+discovery.relabel "staging" {
+  targets = []
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "project"
+  }
+  // Les logs de Loki et d'Alloy eux-mêmes créeraient une boucle (chaque envoi génère un log) : on les ignore
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex         = "loki|alloy"
+    action        = "drop"
+  }
+}
+
+loki.source.docker "staging" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.staging.targets
+  relabel_rules = discovery.relabel.staging.rules
+  forward_to    = [loki.process.levels.receiver]
+}
+
+loki.process "levels" {
+  forward_to = [loki.write.loki.receiver]
+
+  // Back : une stack trace Java (plusieurs lignes) forme un seul log, puis on lit le niveau
+  stage.match {
+    selector = "{service=\"backend\"}"
+    stage.multiline {
+      firstline     = "^\\d{4}-\\d{2}-\\d{2}T"
+      max_wait_time = "3s"
+    }
+    stage.regex {
+      expression = "^\\S+\\s+(?P<level>TRACE|DEBUG|INFO|WARN|ERROR)\\s"
+    }
+  }
+
+  // PostgreSQL : "LOG:", "WARNING:", "ERROR:", "FATAL:"
+  stage.match {
+    selector = "{service=\"db\"}"
+    stage.regex {
+      expression = "\\s(?P<level>LOG|INFO|NOTICE|WARNING|ERROR|FATAL|PANIC):\\s"
+    }
+  }
+
+  // nginx (front) : erreurs au format "[error]" ; les lignes d'accès n'ont pas de niveau
+  stage.match {
+    selector = "{service=\"frontend\"}"
+    stage.regex {
+      expression = "\\[(?P<level>info|notice|warn|error|crit|alert|emerg)\\]"
+    }
+  }
+
+  stage.template {
+    source   = "level"
+    template = "{{ ToUpper .Value }}"
+  }
+  stage.labels {
+    values = { level = "" }
+  }
+}
+
+loki.write "loki" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
