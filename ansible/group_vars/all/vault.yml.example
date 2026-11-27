@@ -4,3 +4,4 @@
 # Les playbooks se lancent alors avec --ask-vault-pass.
 db_password: change-moi
 jwt_secret: une-cle-tres-longue-d-au-moins-32-caracteres-change-moi
+grafana_admin_password: change-moi
