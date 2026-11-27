@@ -1,0 +1,22 @@
+# Valeurs Helm de kube-prometheus-stack (Prometheus + Grafana + exporters) pour la PROD k3s
+grafana:
+  adminPassword: admin            # à changer, ou à passer par --set depuis le vault
+  service:
+    type: NodePort
+    nodePort: 30300               # Grafana : http://<IP d'une VM>:30300
+  sidecar:
+    dashboards:
+      enabled: true               # charge les ConfigMaps étiquetées grafana_dashboard=1
+      label: grafana_dashboard
+prometheus:
+  service:
+    type: NodePort
+    nodePort: 30090               # Prometheus : http://<IP d'une VM>:30090
+  prometheusSpec:
+    # Prend en compte TOUS les ServiceMonitor du cluster (dont le nôtre)
+    serviceMonitorSelectorNilUsesHelmValues: false
+    retention: 2d
+    resources:
+      requests: { cpu: 100m, memory: 400Mi }
+alertmanager:
+  enabled: false                  # pas d'alertes pour la démo (amélioration possible)
