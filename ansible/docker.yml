@@ -1,6 +1,7 @@
 # Installe Docker sur la VM de staging (Ubuntu vierge), puis y déploie le staging :
 #   ansible-playbook docker.yml --ask-vault-pass
 # Relancer ce playbook ne change rien si Docker est déjà installé et le staging à jour (idempotence).
+# Ensuite, les déploiements sont faits par la CI : runner GitHub auto-hébergé installé sur cette VM (voir README).
 #
 # Pourquoi une VM à part : sur un nœud k3s, Docker modifie les règles iptables (politique FORWARD
 # à DROP) et peut casser le réseau des pods. La prod (k3s) et le staging (Docker) restent séparés.
@@ -70,14 +71,23 @@
         version: main
         depth: 1
 
+    - name: Écrire les variables du staging (secrets du vault), lues aussi par le runner GitHub
+      ansible.builtin.copy:
+        dest: /etc/jat-staging.env
+        owner: "{{ ansible_user }}"
+        mode: "0600"
+        content: |
+          DH={{ dockerhub_user }}
+          DB_PASSWORD={{ db_password }}
+          JWT_SECRET={{ jwt_secret }}
+          GRAFANA_PASSWORD={{ grafana_admin_password }}
+          HEALTH_TIMEOUT=180
+      no_log: true
+
     - name: Déployer la dernière version publiée (health check + rollback automatique)
-      ansible.builtin.command: bash {{ staging_dir }}/staging/deploy-staging.sh
-      environment:
-        DH: "{{ dockerhub_user }}"
-        DB_PASSWORD: "{{ db_password }}"
-        JWT_SECRET: "{{ jwt_secret }}"
-        GRAFANA_PASSWORD: "{{ grafana_admin_password }}"
-        HEALTH_TIMEOUT: "180"          # premier démarrage de Spring plus lent sur une petite VM
+      ansible.builtin.shell: |
+        set -a; . /etc/jat-staging.env; set +a
+        bash {{ staging_dir }}/staging/deploy-staging.sh
       register: staging_deploy
       # "changed" seulement si la version a vraiment changé (version actuelle différente de la demandée)
       changed_when: >-
