@@ -1,0 +1,15 @@
+# PROD : demande à Prometheus de collecter /actuator/prometheus sur chaque pod back-end,
+# y compris ceux ajoutés par le HPA.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: backend
+  namespace: jat
+spec:
+  selector:
+    matchLabels:
+      app: backend
+  endpoints:
+    - port: http
+      path: /actuator/prometheus
+      interval: 15s
