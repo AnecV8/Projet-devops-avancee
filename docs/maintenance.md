@@ -133,3 +133,9 @@ réinstaller invalide les anciens certificats.
 | PodDisruptionBudget backend (`minAvailable: 1`) | un `kubectl drain` ne peut pas arrêter tous les back-ends en même temps |
 | Rolling update `maxUnavailable: 0` + readiness | mise à jour sans coupure |
 | Playbooks idempotents | relancer Ansible pour remettre l'état voulu sans risque |
+
+## Test réalisé
+
+27/11/2026 : `kubectl drain vmX` (nœud sans PostgreSQL) pendant une boucle de requêtes HTTP toutes les 0,5 s.
+Les pods back-end et front-end ont été recréés sur l'autre nœud, le PodDisruptionBudget a gardé un back-end disponible,
+et **toutes les réponses ont été des 200** : aucune interruption. Nœud remis en service avec `kubectl uncordon`.
